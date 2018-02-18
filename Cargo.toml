@@ -1,0 +1,6 @@
+[package]
+name = "protobuf-event-parse"
+version = "0.1.0"
+authors = ["Tonny Staunsbrink <tonny.staunsbrink@skyscanner.net>"]
+
+[dependencies]

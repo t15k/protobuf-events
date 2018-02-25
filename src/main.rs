@@ -2,11 +2,80 @@ use std::io::Read;
 
 fn main() {
 	println!("Stream proto");
-	let a = MessageHandler{field_handlers: std::collections::HashMap::new()};
+	let mut a = MessageHandler{field_handlers: std::collections::HashMap::new()};
 	let  b = [1, 2];
 	a.parse_bytes(&mut &b[..]);
 	println!("I made it");
 }
+#[test]
+fn test_do_like_this() {
+	let mut reg :std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+	reg.insert(1, 2);
+	let r = [1u8, 2];
+	let mut re = &r[..];
+	let mut count = 0;
+	for res in Iter(&mut re) {
+		match res {
+			Ok((k, v, t)) => {
+				println!("AAAAAA");
+				count += 1;
+				match reg.get(&k) {
+					Some(h) => {println!("HELLO");read_varu64(&mut &r[..]);},//handle(v),
+					None => continue
+				}
+			}
+			Err(_) => ()
+		}
+	}
+	assert_eq!(2, count);
+}
+struct Iter<'a>(&'a mut Read);
+//struct Item(i64, u64, i64);
+impl<'a> Iterator for Iter<'a>{
+	type Item = Result<(i64, u64, i64), ()>;
+	fn next(&mut self) -> Option<Result<(i64, u64, i64), ()>> {
+		let mut re = &mut self.0;
+		match read_varu64(&mut re) {
+			Ok(i) => Some(Ok((1, i, 3))),
+			Err(_) => None
+		}
+	}
+}
+
+
+fn next_field(r: &mut Read) -> Result<(u64, u8), ()> {
+	return match read_varu64(r) {
+		Ok(tag) => {
+			let field_type :u8 = (tag & 0x07) as u8;
+			let field_id = tag >> 3;
+			Ok((field_id, field_type))
+		},
+		Err(_) => Err(()) // FIXME
+	}
+}
+
+// --------------------------------------
+#[test]
+fn test_or_do_like_this() {
+	let mut reg :std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+	reg.insert(1, 2);
+	let r = [1u8, 2];
+	let mut count = 0;
+	parse(&mut &r[..], &mut |re| {
+		let mut rr = [0; 1];
+		re.read(&mut rr);
+		count += 1});
+	assert_eq!(1, count);
+}
+fn parse<F>(r :&mut Read, f :&mut F) where F :FnMut(&mut Read) {
+	let re = r;
+	match next_field(re) {
+		Ok((_, _)) => f(re),
+		Err(_) => ()
+	}
+}
+
+
 
 // Handler takes a reader and will unmarshal to type
 // handled by the handler, it will consume bytes from the
@@ -14,18 +83,22 @@ fn main() {
 trait Handle {
 	fn handle(&self, r: &mut std::io::Read);
 }
+trait Sink<T> {
+	fn accept(&mut self, v: T);
+}
 
 struct MessageHandler<'a> {
+	//field_handlers: std::collections::HashMap<u64, Box<Handle>>// map[uint64]Handler
 	field_handlers: std::collections::HashMap<u64, &'a Handle>// map[uint64]Handler
 	// u32 -> Handler taking
 }
-impl <'a >MessageHandler<'a>{
+impl<'a> MessageHandler<'a> {
 	fn new() -> Self {
 		MessageHandler{field_handlers: std::collections::HashMap::new()}
 	}
 	// ParseBytes will parse the bytes with the current handlers
 	// registered on this MessageHandler.
-	fn parse_bytes(&self, b: &mut&[u8]) {
+	fn parse_bytes(&mut self, b: &mut&[u8]) {
 	    let v = [1u8, 2, 3];
 		self.handle(b); // return
 		self.handle(&mut &v[..]); // return
@@ -61,15 +134,30 @@ impl<'a> Handle for MessageHandler<'a> {
 		}
 	}
 }
+use std::rc::Rc;
 #[test]
 fn test_message_handler_handle() {
-	let x1 = std::cell::Cell::new(0);
-	let u64handler = Uint64Handler{callback: &|y: u64| x1.set(y)};
+	let sq = [1u64, 2, 3];
+	let mut v = vec![];
 	let mut mh1 = MessageHandler::new();
-	mh1.field(1, &u64handler);
-	let bytes = [8, 5];
-	mh1.handle(&mut &bytes[..]);
-	assert_eq!(5, x1.get())
+	for s in sq.iter() {
+		struct AA (u64);
+		impl Sink<u64> for AA {
+			fn accept(&mut self, i :u64) {
+				self.0 = i;
+			}
+		}
+		let aa: AA = AA(2);
+		//v.push(|y: u64| y + 1);
+		let x1 = std::cell::Cell::new(0);
+		v.push(x1);
+		let u64handler = Uint64Handler{c: Box::new(aa)};
+///		//mh1.field(*s, Box::new(u64handler));
+//		mh1.field(*s, &u64handler);
+		let bytes = [8, 5];
+		mh1.handle(&mut &bytes[..]);
+	//	assert_eq!(5, x1.get())
+	}
 }
 
 
@@ -112,22 +200,41 @@ fn test_int32_handler_handle() {
 
 struct StringHandler {}
 
-struct Uint64Handler<'a> {
-	callback: &'a Fn(u64)
+struct Uint64Handler{c: Box<Sink<u64>>}
+
+
+type MyNum = i64;
+trait Inc {
+	fn inc(&self) -> MyNum;
+}
+impl Inc for MyNum {
+	fn inc(&self) -> MyNum {
+		return self + 1;
+	}
 }
 
-impl<'a> Uint64Handler<'a> {
-
-}
-impl<'a> Handle for Uint64Handler<'a> {
+impl Handle for Uint64Handler {
 	fn handle(&self, r: &mut Read) {// (err error) {
 		match read_varu64(r) {
-			Ok(v) => (self.callback)(v),
+			Ok(v) => return,//self.c.accept(v),
 			Err(_) => return // FIXME
 		};
 	}
 }
+#[test]
+fn test_some() {
+	let v1 = vec![1, 3];
+	let v2 = vec![1, 3];
 
+	assert_eq!(v1, v2);
+	let mut v3 = vec![1];
+	v3.push(3);
+	assert_eq!(v1, v3);
+	let mn: MyNum = 5;
+	assert_eq!(7, mn.inc().inc());
+
+
+}
 //struct Int64Handler {
 //	callback: Fn(i64)
 //}
@@ -150,7 +257,7 @@ impl<'a> Handle for Uint32Handler<'a> {
 #[test]
 fn test_uint32_handler_handle() {
 	let x1 = std::cell::Cell::new(0u32);
-	let h = Uint32Handler{callback: &|y: u32| x1.set(y)};
+	let mut h = Uint32Handler{callback: &|y: u32| x1.set(y)};
 	let bytes = [255, 1];//, 255, 255, 255, 255, 255, 255];
 	h.handle(&mut &bytes[..]);
 	assert_eq!(255, x1.get())

@@ -1,29 +1,30 @@
 use std::io::Read;
+//use std::collections::HashMap;
 
-trait Go {
-	fn go(&mut self, r: &std::io::Read);
-}
+//struct  ProtoType { // What is this for?
 
-struct Goer {
+//}
 
-}
-impl Go for Goer {
-	fn go(&mut self, _: &std::io::Read){
 
-	}
-}
-
-fn go_some() {
-	let mut goer = Goer{};
-	let mut handlers: std::collections::HashMap<Vec<u64>, &mut Go> =
-		std::collections::HashMap::new();
-	handlers.insert(vec![1], &mut goer);
-	let mut h = handlers.get(&vec![1]).unwrap();
-	(*h).go(&std::io::stdin())
-}
 
 fn main() {
 	println!("Stream proto");
+    // read in description file
+    build_message_dict(&mut std::io::stdin());
+    // build a map of field ids to ProtobufTypes ()
+    // read data streams
+    // iterate each field label in there, and read the data
+    //  emit the data as JSON
+
+	// build a map of names to message handlers
+	// a message handler is a map of field (vector) ids to field value handlers
+	// set the expected message type
+	// look up the correct handler by name
+	// set a mutable
+	// parse the input with that handler
+	// for every vec[id], byte_data -> vec[key], json_data
+
+
 	// https://github.com/google/protobuf/blob/master/src/google/protobuf/descriptor.proto
 	// root is a file descriptor set
 	// 	 []FileDescriptorProto file = 1;
@@ -31,23 +32,18 @@ fn main() {
 
 	// parse template and create a handler setup
 	// TODO: JSON templates, raw transformation, schema definitions support
-	let mut x = 1;
-	let one_handler = |_: & Read| {x += 1; ()};
-	let two_handler = |_: & Read| ();
-	//two_handler(&mut std::io::stdin());
-	let mut handlers: std::collections::HashMap<Vec<u64>, &FnMut(&Read) -> ()> =
-		std::collections::HashMap::new();
-//	let mut handlers: std::collections::HashMap<Vec<u64>, &FnMut(&Read) -> ()> =
-//		std::collections::HashMap::new();
-
-	handlers.insert(vec![1], &one_handler);
-	//handlers.insert(vec![1, 1], Box::new(two_handler));
-	//let h = handlers.get_mut(&vec![1]).unwrap();//&mut &FnMut(&Read)
-	//(*h)(&std::io::stdin());
-	parse(&mut std::io::stdin(), &mut |fid, t, r| {
-		println!("fid = {}, t = {}", fid.get(0).unwrap(), t);
+	//let one_handler = |_: & Read| {String::from("hello")};
+	//let two_handler = |_: & Read| String::from("hello");
+	//let mut handlers: std::collections::HashMap<Vec<u64>, &Fn(&Read) -> String> =
+	//	std::collections::HashMap::new();
+	//let mut results: std::collections::HashMap<Vec<u64>, String> =
+	//	std::collections::HashMap::new();
+	//handlers.insert(vec![1], &one_handler);
+	//handlers.insert(vec![1, 1], &two_handler);
+/*	parse(&mut std::io::stdin(), &mut |fid, t, r| {
+		println!("fid = {}, t = {:?}", fid.get(0).unwrap(), t);
 		match t {
-			0x00 => match read_varu64(r) { // varints signed and unsigned
+			WireType::VarInt(_) => match read_varu64(r) { // varints signed and unsigned
 				Ok(v) => {
 					println!("{}: {}", fid.get(0).unwrap(), v);
 				}
@@ -55,8 +51,8 @@ fn main() {
 				//Some(h) => h.handle(r),//; err != nil {
 				//None => return
 			},
-			0x01 => panic!("fixed64, sfixed64, double not supported"),
-			0x02 => { // Length delimeted, string, messages and bytes.
+			WireType::Bit64 => panic!("fixed64, sfixed64, double not supported"),
+			WireType::LengthDelimeted => { // string, messages and bytes.
 				match read_varu64(r) {
 					Ok(size) =>	{
 						println!("will read {} bytes", size);
@@ -65,9 +61,10 @@ fn main() {
 							Some(sub_handle) => {
 								// TODO recurse it a message, or pass to message handler
 								// let mut s = String::new();
-								let ss = *sub_handle;
-								ss(&mut tak);
+								let res_to_insert = sub_handle(&mut tak);
+								let mut s1 = vec![];
 								let mut s = vec![];
+								results.insert(s1, res_to_insert);
 								println!("take limit{}", tak.limit());
 								match tak.read_to_end(&mut s) {
 									Ok(_) => (),//parse_(idf, ), //,panic!(""),
@@ -90,16 +87,136 @@ fn main() {
 				// read bytes a skip
 				//panic!("string, bytes, embedded messages, packed repeated fields not supported");
 			},
-			0x03 => panic!("start groups (deprecated) not supported"),
-			0x04 => panic!("end groups (deprecated) not supported"),
-			0x05 => panic!("fixed32, sfixed32, float not supported"),
-			_ => panic!("not supported")
+			WireType::StartGroup => panic!("start groups (deprecated) not supported"),
+			WireType::EndGroup => panic!("end groups (deprecated) not supported"),
+			WireType::Bit32 => panic!("fixed32, sfixed32, float not supported"),
 		}
-		println!("field: {},  type: {}.", fid.get(0).unwrap(), t);
-	});
+		println!("field: {},  type: {:?}.", fid.get(0).unwrap(), t);
+	});*/
 	//a.parse_bytes(&mut &b[..]);
 	println!("I made it");
 }
+
+#[derive(Debug, Clone)]
+enum WireType {
+    VarInt(u32),
+    Bit64(u32),
+    LengthDelimited(u32),
+    StartGroup,
+    EndGroup,
+    Bit32(u32),
+    Unknown(u8, u32)
+}
+#[derive(Debug, Clone)]
+enum WireField {
+    VarInt(u32, u64),
+    Bit64(u32, u64),
+    LengthDelimited(u32, Vec<u8>),
+    Bit32(u32, u32),
+    StartGroup,
+    EndGroup,
+    Unknown(u8, u32)
+}
+enum SchemaType {
+    PDouble,
+    PFloat,
+    PInt32,
+    PInt64,
+    PUInt32,
+    PUInt64,
+    PSInt32,
+    PSInt64,
+    PFixed32,
+    PFixed64,
+    PSfixed32,
+    PSfixed64,
+    PBool,
+    PString,
+    PBytes,
+    PMessage,
+    PEnum,
+    PWireVarInt,
+    PWireBit64,
+    PWireLengthDelimeted,
+    PWireStartGroup,
+    PWireBit32,
+    PWireUnknown
+}
+enum Field {
+    PDouble(u32, f64),
+    PFloat(u32, f32),
+    PInt32(u32, i32),
+    PInt64(u32, i64),
+    PUInt32(u32, u32),
+    PUInt64(u32, u64),
+    PSInt32(u32, i32),
+    PSInt64(u32, i32),
+    PFixed32(u32, u32),
+    PFixed64(u32, u64),
+    PSfixed32(u32, i32),
+    PSfixed64(u32, i64),
+    PBool(u32, bool),
+    PString(u32, String),
+    PBytes(u32, Vec<u8>),
+    PMessage,
+    PEnum,
+    PWireVarInt,
+    PWireBit64,
+    PWireLengthDelimeted,
+    PWireStartGroup,
+    PWireBit32,
+    PWireUnknown
+}
+fn walk(r :&mut Read) {
+   //let wire_type = read_key(r).unwrap();
+}
+
+struct ProtoBuffer <'a> {
+    read: &'a mut Read,
+}
+
+impl <'a> ProtoBuffer <'a> {
+    fn read_bytes(&mut self) -> Result<Vec<u8>, std::io::Error> {
+        return read_bytes(self.read);
+    }
+}
+impl <'a> Iterator for ProtoBuffer <'a>{
+    type Item = WireField;
+    fn next(&mut self) -> Option<Self::Item> {
+        let wf = match read_key(self.read).unwrap() {
+            WireType::VarInt(id) => WireField::VarInt(id, 1),
+            WireType::LengthDelimited(id) => WireField::LengthDelimited(id, vec![1]),
+            WireType::Bit32(id) => WireField::Bit32(id, 1),
+            WireType::Bit64(id) => WireField::Bit64(id, 2),
+            WireType::StartGroup => WireField::StartGroup,
+            WireType::EndGroup => WireField::EndGroup,
+            WireType::Unknown(id, v) => WireField::Unknown(id, v)
+        };
+        return Some(wf);
+    }
+}
+
+fn build_message_dict (r :&mut Read) {
+    let p = ProtoBuffer { 
+        read: r 
+    }; 
+    for n in p {
+    //    let x = match n {
+      //      LengthDelimited => p.read_bytes().unwrap() as Vec<u8>, 
+            //_ => Vec::new() as Vec<u8>
+       // };
+        println!("{:?}", n);
+    }
+	// we are looking for top level message_type, 4
+	// we are looking for top level enum_type, 5
+	//	inside we're looking for 	field, 2
+//										for a field name
+//													type
+//													the field id?
+//									enum_type, 3
+//									nested_type
+}
+
 #[test]
 fn test_do_like_this() {
 	let mut reg :std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
@@ -109,10 +226,10 @@ fn test_do_like_this() {
 	let mut count = 0;
 	for res in Iter(&mut re) {
 		match res {
-			Ok((k, v, t)) => {
+			Ok((k, _, _)) => { // was v, t
 				count += 1;
 				match reg.get(&k) {
-					Some(h) => {println!("HELLO");read_varu64(&mut &r[..]);},//handle(v),
+					Some(_) => {println!("HELLO");read_varu64(&mut &r[..]);},//handle(v), // was h
 					None => continue
 				}
 			}
@@ -134,60 +251,29 @@ impl<'a> Iterator for Iter<'a>{
 	}
 }
 
-
-fn next_field(r: &mut Read) -> Result<(u64, u8), ()> {
+/// Read the next field tag (not it's value) from r.
+/// Advances r to the value following the next tag.
+/// Answers a tuple (field_id, field_type)
+fn read_key(r: &mut Read) -> Result<(WireType), ()> {
 	return match read_varu64(r) {
 		Ok(tag) => {
-			let field_type :u8 = (tag & 0x07) as u8;
-			let field_id = tag >> 3;
-			Ok((field_id, field_type))
+			Ok(wire_type((tag & 0x07) as u8, (tag >> 3) as u32))
 		},
 		Err(_) => Err(()) // FIXME
 	}
 }
 
-// --------------------------------------
-#[test]
-fn test_or_do_like_this() {
-	let mut reg :std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
-	reg.insert(1, 2);
-	let r = [1u8, 2];
-	let mut count = 0;
-	parse(&mut &r[..], &mut |fid, t, re| {
-		let mut rr = [0; 1];
-		re.read(&mut rr);
-		count += 1});
-	assert_eq!(1, count);
+fn wire_type(wire_type :u8, id :u32) -> WireType {
+    return match wire_type {
+        0x00 => WireType::VarInt(id),
+        0x01 => WireType::Bit64(id),
+        0x02 => WireType::LengthDelimited(id),
+        0x03 => WireType::StartGroup,
+        0x04 => WireType::EndGroup,
+        0x05 => WireType::Bit32(id),
+        _ => WireType::Unknown(wire_type, id)
+    }
 }
-#[test]
-fn test_or_another_do_like_this() {
-	let mut reg :std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
-	reg.insert(1, 2);
-	let r = [1u8, 2];
-	parse(&mut &r[..], &mut |_, _, _| {});
-	//assert_eq!(1, count);
-}
-
-fn parse<F>(r :&mut Read, f :&mut F) where F :FnMut(&Vec<u64>, u8, &mut Read) {
-	let mut idp = vec![];
-	parse_(r, f, &mut idp);
-}
-
-/// Reads next field from r (Read) and call f with the found field ID and field field_type.
-/// The idp (Vector<i64>) has the current fields pushed and popped on return.
-fn parse_<F>(r :&mut Read, f :&mut F, idp :&mut Vec<u64>) where F :FnMut(&Vec<u64>, u8, &mut Read) {
-	loop {
-		match next_field(r) {
-			Ok((fid, t)) => {
-				idp.push(fid);
-				println!("000 {}, {}", idp.len(), t);
-				f(idp, t, r);
-				idp.pop();},
-			Err(_) => return
-		}
-	}
-}
-
 
 
 // Handler takes a reader and will unmarshal to type
@@ -248,8 +334,8 @@ impl<'a> Handle for MessageHandler<'a> {
 fn test_message_handler_handle() {
 	let sq = [1u64, 2, 3];
 	let mut v = vec![];
-	let mut mh1 = MessageHandler::new();
-	for s in sq.iter() {
+	let mh1 = MessageHandler::new();
+	for _ in sq.iter() { // was s
 		struct AA (u64);
 		impl Sink<u64> for AA {
 			fn accept(&mut self, i :u64) {
@@ -260,8 +346,9 @@ fn test_message_handler_handle() {
 		//v.push(|y: u64| y + 1);
 		let x1 = std::cell::Cell::new(0);
 		v.push(x1);
-		let u64handler = Uint64Handler{c: Box::new(aa)};
-///		//mh1.field(*s, Box::new(u64handler));
+		// let u64handler =
+        Uint64Handler{c: Box::new(aa)};
+//		//mh1.field(*s, Box::new(u64handler));
 //		mh1.field(*s, &u64handler);
 		let bytes = [8, 5];
 		mh1.handle(&mut &bytes[..]);
@@ -324,7 +411,7 @@ impl Inc for MyNum {
 impl Handle for Uint64Handler {
 	fn handle(&self, r: &mut Read) {// (err error) {
 		match read_varu64(r) {
-			Ok(v) => return,//self.c.accept(v),
+			Ok(_) => return,//self.c.accept(v), // was v
 			Err(_) => return // FIXME
 		};
 	}
@@ -365,28 +452,12 @@ impl<'a> Handle for Uint32Handler<'a> {
 #[test]
 fn test_uint32_handler_handle() {
 	let x1 = std::cell::Cell::new(0u32);
-	let mut h = Uint32Handler{callback: &|y: u32| x1.set(y)};
+	let h = Uint32Handler{callback: &|y: u32| x1.set(y)};
 	let bytes = [255, 1];//, 255, 255, 255, 255, 255, 255];
 	h.handle(&mut &bytes[..]);
 	assert_eq!(255, x1.get())
 	//assert_eq!(std::u32::MAX, x1.get())
 }
-//struct BoolHandler {
-//	callback: Fn(bool)
-//}
-//struct FloatHandler {
-//	callback: Fn(f32)
-//}
-//struct DoubleHandler {
-//	callback: Fn(f64)
-//}
-//struct BinaryHandler {
-//	callback: Fn(&[i8])
-//}
-//struct VariError<T, E> {
-//	value: T,
-//	reason: E
-//}
 
 #[derive(Debug)]
 enum ReadStatus {
@@ -454,12 +525,19 @@ fn test_read_varu64_to_few_byte(){
 		}
 	}
 }
-//fn read_bytes<'a>(r :&'a mut Read) -> &'a [u8] {
-//	match read_varu64(r) {
-//		Ok(v) => ,
-//		Err(e) => Err(e)
-//	}
-//}
+fn read_bytes<'a>(r :&'a mut Read) -> Result<Vec<u8>, std::io::Error> {
+	match read_varu64(r) {
+		Ok(l) => {
+            let mut t = r.take(l);
+            let mut v = Vec::with_capacity(l as usize);
+            match t.read_to_end(&mut v) {
+                Ok(_) => Ok(v),
+                Err(e) => Err(e)
+            }
+        },
+		Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, "oh no"))
+	}
+}
 
 //fn read_vari64(r: &mut Read) -> Result<i64, i64> {
 //	let ux = match read_varu64(r) {

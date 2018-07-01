@@ -117,6 +117,7 @@ enum WireField {
     EndGroup,
     Unknown(u8, u32)
 }
+
 enum SchemaType {
     PDouble,
     PFloat,
@@ -183,16 +184,32 @@ impl <'a> ProtoBuffer <'a> {
 impl <'a> Iterator for ProtoBuffer <'a>{
     type Item = WireField;
     fn next(&mut self) -> Option<Self::Item> {
-        let wf = match read_key(self.read).unwrap() {
-            WireType::VarInt(id) => WireField::VarInt(id, 1),
-            WireType::LengthDelimited(id) => WireField::LengthDelimited(id, vec![1]),
-            WireType::Bit32(id) => WireField::Bit32(id, 1),
-            WireType::Bit64(id) => WireField::Bit64(id, 2),
-            WireType::StartGroup => WireField::StartGroup,
-            WireType::EndGroup => WireField::EndGroup,
-            WireType::Unknown(id, v) => WireField::Unknown(id, v)
+        return match read_key(self.read) {
+            Ok(wt) => match wt {
+                WireType::VarInt(id) => match read_varu64(self.read) {
+                    Ok(v) => Some(WireField::VarInt(id,v)),
+                    Err(e) => panic!(e)
+                },
+                WireType::LengthDelimited(id) => match read_bytes(self.read) {
+                    Ok(v) => Some(WireField::LengthDelimited(id, v)),
+                    Err(e) => panic!(e)
+                },
+                WireType::Bit32(id) => 
+                    Some(WireField::Bit32(id, read_fixedu32(self.read))),
+                WireType::Bit64(id) =>
+                    Some(WireField::Bit64(id, read_fixedu64(self.read))),
+                WireType::StartGroup =>
+                    Some(WireField::StartGroup),
+                WireType::EndGroup =>
+                    Some(WireField::EndGroup),
+                WireType::Unknown(id, v) =>
+                    Some(WireField::Unknown(id, v))
+            },
+            Err(ReadStatus::Empty) => None,
+            Err(e) => {
+                println!("{:?}", e);
+                panic!("")}
         };
-        return Some(wf);
     }
 }
 
@@ -254,12 +271,12 @@ impl<'a> Iterator for Iter<'a>{
 /// Read the next field tag (not it's value) from r.
 /// Advances r to the value following the next tag.
 /// Answers a tuple (field_id, field_type)
-fn read_key(r: &mut Read) -> Result<(WireType), ()> {
+fn read_key(r: &mut Read) -> Result<(WireType), ReadStatus> {
 	return match read_varu64(r) {
 		Ok(tag) => {
 			Ok(wire_type((tag & 0x07) as u8, (tag >> 3) as u32))
 		},
-		Err(_) => Err(()) // FIXME
+		Err(e) => Err(e) // FIXME
 	}
 }
 
@@ -398,16 +415,6 @@ struct StringHandler {}
 struct Uint64Handler{c: Box<Sink<u64>>}
 
 
-type MyNum = i64;
-trait Inc {
-	fn inc(&self) -> MyNum;
-}
-impl Inc for MyNum {
-	fn inc(&self) -> MyNum {
-		return self + 1;
-	}
-}
-
 impl Handle for Uint64Handler {
 	fn handle(&self, r: &mut Read) {// (err error) {
 		match read_varu64(r) {
@@ -416,23 +423,6 @@ impl Handle for Uint64Handler {
 		};
 	}
 }
-#[test]
-fn test_some() {
-	let v1 = vec![1, 3];
-	let v2 = vec![1, 3];
-
-	assert_eq!(v1, v2);
-	let mut v3 = vec![1];
-	v3.push(3);
-	assert_eq!(v1, v3);
-	let mn: MyNum = 5;
-	assert_eq!(7, mn.inc().inc());
-
-
-}
-//struct Int64Handler {
-//	callback: Fn(i64)
-//}
 
 struct Uint32Handler<'a> {
 	callback: &'a Fn(u32)
@@ -492,6 +482,7 @@ fn read_varu64(r: &mut Read) -> Result<u64, ReadStatus> {// (uint64, error) {
 		}
 	}
 }
+
 #[test]
 fn test_read_varu64(){
 	let simple = [0x01];
@@ -535,8 +526,32 @@ fn read_bytes<'a>(r :&'a mut Read) -> Result<Vec<u8>, std::io::Error> {
                 Err(e) => Err(e)
             }
         },
-		Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, "oh no"))
+		Err(_) => Err(std::io::Error::new(std::io::ErrorKind::Other, "oh no"))
 	}
+}
+fn read_fixedu32(r : &mut Read) -> u32 {
+    let mut buf = [0; 4];
+    let mut n :u32 = 0;
+    r.read_exact(&mut buf);
+    for e in buf.iter() {
+        n = n << 8;
+        n +=  *e as u32;
+    }
+    return n;
+}
+fn read_fixedu64(r : &mut Read) -> u64 {
+    let mut buf = [0; 8];
+    let mut n :u64 = 0;
+    r.read_exact(&mut buf);
+    for e in buf.iter() {
+        n = n << 8;
+        n +=  *e as u64;
+    }
+    return n;
+}
+
+fn read_int32(i :u64) -> i32 {
+    return i as i32;
 }
 
 //fn read_vari64(r: &mut Read) -> Result<i64, i64> {

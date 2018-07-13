@@ -117,31 +117,32 @@ enum WireField {
     EndGroup,
     Unknown(u8, u32)
 }
-
+#[derive(Debug, Clone)]
 enum SchemaType {
-    PDouble,
-    PFloat,
-    PInt32,
-    PInt64,
-    PUInt32,
-    PUInt64,
-    PSInt32,
-    PSInt64,
-    PFixed32,
-    PFixed64,
-    PSfixed32,
-    PSfixed64,
-    PBool,
-    PString,
-    PBytes,
-    PMessage,
-    PEnum,
-    PWireVarInt,
-    PWireBit64,
-    PWireLengthDelimeted,
-    PWireStartGroup,
-    PWireBit32,
-    PWireUnknown
+    Double,
+    Float,
+    Int32,
+    Int64,
+    UInt32,
+    UInt64,
+    SInt32,
+    SInt64,
+    Fixed32,
+    Fixed64,
+    SFixed32,
+    SFixed64,
+    Bool,
+    String,
+    Bytes,
+    Message,
+    Enum,
+    Group,
+    WireVarInt,
+    WireBit64,
+    WireLengthDelimeted,
+    WireStartGroup,
+    WireBit32,
+    WireUnknown
 }
 enum Field {
     PDouble(u32, f64),
@@ -168,9 +169,9 @@ enum Field {
     PWireBit32,
     PWireUnknown
 }
-fn walk(r :&mut Read) {
+//fn walk(_r :&mut Read) {
    //let wire_type = read_key(r).unwrap();
-}
+//}
 
 struct ProtoBuffer <'a> {
     read: &'a mut Read,
@@ -213,17 +214,31 @@ impl <'a> Iterator for ProtoBuffer <'a>{
     }
 }
 
-fn build_message_dict (r :&mut Read) {
-    let p = ProtoBuffer { 
+fn raw_parse(r :&mut Read) -> ProtoBuffer {
+    return ProtoBuffer { 
         read: r 
     }; 
-    for n in p {
+}
+
+fn build_message_dict (r :&mut Read) {
+
+    //let p = ProtoBuffer { 
+      //  read: r 
+    //}; 
+    parse_file_descriptor_proto_set(r);
+    //for n in p {
     //    let x = match n {
       //      LengthDelimited => p.read_bytes().unwrap() as Vec<u8>, 
             //_ => Vec::new() as Vec<u8>
        // };
-        println!("{:?}", n);
-    }
+      // match n {
+        //   WireField::LengthDelimited(1, v) => {
+//
+ //              println!("---- {:?}", v);
+  //         },
+    //       _ =>  println!("{:?}", n)
+      // }
+   // }
 	// we are looking for top level message_type, 4
 	// we are looking for top level enum_type, 5
 	//	inside we're looking for 	field, 2
@@ -234,6 +249,64 @@ fn build_message_dict (r :&mut Read) {
 //									nested_type
 }
 
+fn parse_file_descriptor_proto_set(r :&mut Read) {
+    for e in raw_parse(r) {
+        match e {
+            WireField::LengthDelimited(1, mut v) => {
+                parse_file_descriptor_proto(&mut &v[..]);
+            },
+            _ => ()
+        }
+    }
+}
+fn parse_file_descriptor_proto(r :&mut Read) {
+    for e in raw_parse(r) {
+        match e {
+            WireField::LengthDelimited(1, v) => {
+                match String::from_utf8(v) {
+                    Ok(s) => println!("{:?}", s),
+                    Err(e)=> println!("{:?}", e)
+                }
+            },
+            WireField::LengthDelimited(2, v) => {
+                match String::from_utf8(v) {
+                    Ok(s) => println!("package name {:?}", s),
+                    Err(e) => println!("{:?}", e)
+                }
+            },
+            WireField::LengthDelimited(4, v) => parse_descriptor_proto(&mut &v[..]),
+            _ => println!("{:?}", e)
+        }
+    }
+    println!("Parsing descriptor!!!!")
+}
+
+fn parse_descriptor_proto(r :&mut Read) {
+    for e in raw_parse(r) {
+        match e {
+            WireField::LengthDelimited(1, v) => match String::from_utf8(v) {
+                Ok(s) => println!("message name {:?}", s),
+                Err(e) => println!("{:?}", e)
+            },
+            WireField::LengthDelimited(2, v) => parse_field_descriptor_proto(&mut &v[..]),
+            _ => ()
+        }
+    }
+}
+
+fn parse_field_descriptor_proto(r :&mut Read) {
+    for e in raw_parse(r) {
+        match e {
+            WireField::LengthDelimited(1, v) => match String::from_utf8(v) {
+                Ok(s) => print!("field name {:?}", s),
+                Err(e) => println!("{:?}", e)
+            },
+            WireField::VarInt(3, n) => print!(" {:?}", n),
+            WireField::VarInt(5, n) => println!(" {:?}", schema_type(n)),
+            _ => ()
+        }
+    }
+}
 #[test]
 fn test_do_like_this() {
 	let mut reg :std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
@@ -550,8 +623,39 @@ fn read_fixedu64(r : &mut Read) -> u64 {
     return n;
 }
 
+// ------------------------------
+// High level readers
+// ------------------------------
 fn read_int32(i :u64) -> i32 {
     return i as i32;
+}
+
+fn read_string(v :Vec<u8>) -> Result<String, std::string::FromUtf8Error> {
+    return String::from_utf8(v);
+}
+
+fn schema_type(n :u64) -> SchemaType {
+    return match n {
+        1 => SchemaType::Double,
+        2 => SchemaType::Float,
+        3 => SchemaType::Int64,
+        4 => SchemaType::UInt64,
+        5 => SchemaType::Int32,
+        6 => SchemaType::Fixed64,
+        7 => SchemaType::Fixed32,
+        8 => SchemaType::Bool,
+        9 => SchemaType::String,
+        10 => SchemaType::Group,
+        11 => SchemaType::Message,
+        12 => SchemaType::Bytes,
+        13 => SchemaType::UInt32,
+        14 => SchemaType::Enum,
+        15 => SchemaType::SFixed32,
+        16 => SchemaType::SFixed64,
+        17 => SchemaType::SInt32,
+        18 => SchemaType::SInt64,
+        _ => SchemaType::String
+    }
 }
 
 //fn read_vari64(r: &mut Read) -> Result<i64, i64> {

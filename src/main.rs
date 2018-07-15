@@ -1,5 +1,5 @@
 use std::io::Read;
-//use std::collections::HashMap;
+use std::collections::HashMap;
 
 //struct  ProtoType { // What is this for?
 
@@ -9,26 +9,11 @@ use std::io::Read;
 
 fn main() {
 	println!("Stream proto");
-    // read in description file
-    build_message_dict(&mut std::io::stdin());
-    // build a map of field ids to ProtobufTypes ()
+    let type_map = parse_file_descriptor_proto_set(&mut std::io::stdin());
     // read data streams
     // iterate each field label in there, and read the data
     //  emit the data as JSON
-
-	// build a map of names to message handlers
-	// a message handler is a map of field (vector) ids to field value handlers
-	// set the expected message type
-	// look up the correct handler by name
-	// set a mutable
-	// parse the input with that handler
-	// for every vec[id], byte_data -> vec[key], json_data
-
-
 	// https://github.com/google/protobuf/blob/master/src/google/protobuf/descriptor.proto
-	// root is a file descriptor set
-	// 	 []FileDescriptorProto file = 1;
-	//
 
 	// parse template and create a handler setup
 	// TODO: JSON templates, raw transformation, schema definitions support
@@ -119,31 +104,33 @@ enum WireField {
 }
 #[derive(Debug, Clone)]
 enum SchemaType {
-    Double,
-    Float,
-    Int32,
-    Int64,
-    UInt32,
-    UInt64,
-    SInt32,
-    SInt64,
-    Fixed32,
-    Fixed64,
-    SFixed32,
-    SFixed64,
-    Bool,
-    String,
-    Bytes,
-    Message,
-    Enum,
-    Group,
-    WireVarInt,
-    WireBit64,
-    WireLengthDelimeted,
-    WireStartGroup,
-    WireBit32,
-    WireUnknown
+    Double(Meta),
+    Float(Meta),
+    Int32(Meta),
+    Int64(Meta),
+    UInt32(Meta),
+    UInt64(Meta),
+    SInt32(Meta),
+    SInt64(Meta),
+    Fixed32(Meta),
+    Fixed64(Meta),
+    SFixed32(Meta),
+    SFixed64(Meta),
+    Bool(Meta),
+    String(Meta),
+    Bytes(Meta),
+    Message(Meta),
+    Enum(Meta),
+    Group(Meta),
+    Unknown
 }
+#[derive(Debug, Clone)]
+struct Meta {
+    name :String,
+    field_number: u64,
+    repeated :bool
+}
+
 enum Field {
     PDouble(u32, f64),
     PFloat(u32, f32),
@@ -169,9 +156,6 @@ enum Field {
     PWireBit32,
     PWireUnknown
 }
-//fn walk(_r :&mut Read) {
-   //let wire_type = read_key(r).unwrap();
-//}
 
 struct ProtoBuffer <'a> {
     read: &'a mut Read,
@@ -220,46 +204,22 @@ fn raw_parse(r :&mut Read) -> ProtoBuffer {
     }; 
 }
 
-fn build_message_dict (r :&mut Read) {
-
-    //let p = ProtoBuffer { 
-      //  read: r 
-    //}; 
-    parse_file_descriptor_proto_set(r);
-    //for n in p {
-    //    let x = match n {
-      //      LengthDelimited => p.read_bytes().unwrap() as Vec<u8>, 
-            //_ => Vec::new() as Vec<u8>
-       // };
-      // match n {
-        //   WireField::LengthDelimited(1, v) => {
-//
- //              println!("---- {:?}", v);
-  //         },
-    //       _ =>  println!("{:?}", n)
-      // }
-   // }
-	// we are looking for top level message_type, 4
-	// we are looking for top level enum_type, 5
-	//	inside we're looking for 	field, 2
-//										for a field name
-//													type
-//													the field id?
-//									enum_type, 3
-//									nested_type
-}
-
 fn parse_file_descriptor_proto_set(r :&mut Read) {
+    let mut names_to_types = HashMap::new();
     for e in raw_parse(r) {
         match e {
             WireField::LengthDelimited(1, mut v) => {
-                parse_file_descriptor_proto(&mut &v[..]);
+                parse_file_descriptor_proto(&mut &v[..], &mut names_to_types);
             },
             _ => ()
         }
     }
+    println!("{:?}", &names_to_types);
 }
-fn parse_file_descriptor_proto(r :&mut Read) {
+
+fn parse_file_descriptor_proto(r :&mut Read, 
+                               type_names :&mut HashMap<String, HashMap<u64, SchemaType>>) {
+    let mut package_name = String::from(""); // TODO we can be more clever
     for e in raw_parse(r) {
         match e {
             WireField::LengthDelimited(1, v) => {
@@ -270,43 +230,62 @@ fn parse_file_descriptor_proto(r :&mut Read) {
             },
             WireField::LengthDelimited(2, v) => {
                 match String::from_utf8(v) {
-                    Ok(s) => println!("package name {:?}", s),
+                    Ok(s) => package_name = s,
                     Err(e) => println!("{:?}", e)
                 }
             },
-            WireField::LengthDelimited(4, v) => parse_descriptor_proto(&mut &v[..]),
+            WireField::LengthDelimited(4, v) => {
+                let (name, map) = parse_descriptor_proto(&mut &v[..]);
+                type_names.insert(name, map);
+                // TODO use return value
+            },
             _ => println!("{:?}", e)
         }
     }
-    println!("Parsing descriptor!!!!")
 }
 
-fn parse_descriptor_proto(r :&mut Read) {
+/// Parse a message descriptor.
+fn parse_descriptor_proto<'a>(r :&mut Read) -> (String, HashMap<u64, SchemaType>) {
+    let mut message_name = String::from(""); 
+    let mut field_map = HashMap::new();
     for e in raw_parse(r) {
         match e {
             WireField::LengthDelimited(1, v) => match String::from_utf8(v) {
-                Ok(s) => println!("message name {:?}", s),
-                Err(e) => println!("{:?}", e)
+                Ok(s) => message_name = s,
+                Err(e) => println!("{:?}", e) // TODO
             },
-            WireField::LengthDelimited(2, v) => parse_field_descriptor_proto(&mut &v[..]),
+            WireField::LengthDelimited(2, v) => {
+                let (field_no, typ) = parse_field_descriptor_proto(&mut &v[..]);
+                field_map.insert(field_no, typ);
+            }
             _ => ()
         }
     }
+    return (message_name, field_map);;
 }
 
-fn parse_field_descriptor_proto(r :&mut Read) {
+fn parse_field_descriptor_proto(r :&mut Read) -> (u64, SchemaType) {
+    let mut meta = Meta{
+        field_number: 0,
+        name: String::from(""),
+        repeated: false
+    };
+    let mut raw_type = 0;
     for e in raw_parse(r) {
         match e {
             WireField::LengthDelimited(1, v) => match String::from_utf8(v) {
-                Ok(s) => print!("field name {:?}", s),
-                Err(e) => println!("{:?}", e)
+                Ok(s) => meta.name = s,
+                Err(e) => println!("{:?}", e) // TODO, Error handling.
             },
-            WireField::VarInt(3, n) => print!(" {:?}", n),
-            WireField::VarInt(5, n) => println!(" {:?}", schema_type(n)),
+            WireField::VarInt(3, n) => meta.field_number = n,
+            WireField::VarInt(4, n) => meta.repeated = n == 3, // 3 is enum REPATED
+            WireField::VarInt(5, n) => raw_type = n,
             _ => ()
         }
     }
+    return (meta.field_number, schema_type(raw_type, meta));
 }
+
 #[test]
 fn test_do_like_this() {
 	let mut reg :std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
@@ -634,27 +613,27 @@ fn read_string(v :Vec<u8>) -> Result<String, std::string::FromUtf8Error> {
     return String::from_utf8(v);
 }
 
-fn schema_type(n :u64) -> SchemaType {
+fn schema_type(n :u64, meta :Meta) -> SchemaType {
     return match n {
-        1 => SchemaType::Double,
-        2 => SchemaType::Float,
-        3 => SchemaType::Int64,
-        4 => SchemaType::UInt64,
-        5 => SchemaType::Int32,
-        6 => SchemaType::Fixed64,
-        7 => SchemaType::Fixed32,
-        8 => SchemaType::Bool,
-        9 => SchemaType::String,
-        10 => SchemaType::Group,
-        11 => SchemaType::Message,
-        12 => SchemaType::Bytes,
-        13 => SchemaType::UInt32,
-        14 => SchemaType::Enum,
-        15 => SchemaType::SFixed32,
-        16 => SchemaType::SFixed64,
-        17 => SchemaType::SInt32,
-        18 => SchemaType::SInt64,
-        _ => SchemaType::String
+        1 => SchemaType::Double(meta),
+        2 => SchemaType::Float(meta),
+        3 => SchemaType::Int64(meta),
+        4 => SchemaType::UInt64(meta),
+        5 => SchemaType::Int32(meta),
+        6 => SchemaType::Fixed64(meta),
+        7 => SchemaType::Fixed32(meta),
+        8 => SchemaType::Bool(meta),
+        9 => SchemaType::String(meta),
+        10 => SchemaType::Group(meta),
+        11 => SchemaType::Message(meta),
+        12 => SchemaType::Bytes(meta),
+        13 => SchemaType::UInt32(meta),
+        14 => SchemaType::Enum(meta),
+        15 => SchemaType::SFixed32(meta),
+        16 => SchemaType::SFixed64(meta),
+        17 => SchemaType::SInt32(meta),
+        18 => SchemaType::SInt64(meta),
+        _ => SchemaType::String(meta)
     }
 }
 

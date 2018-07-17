@@ -1,15 +1,38 @@
 use std::io::Read;
+use std::fs::File;
 use std::collections::HashMap;
 
-//struct  ProtoType { // What is this for?
-
-//}
-
-
-
 fn main() {
-	println!("Stream proto");
-    let type_map = parse_file_descriptor_proto_set(&mut std::io::stdin());
+    let mut desc_filename = String::from("");
+    let mut it = std::env::args().skip(1);
+    loop {
+        match it.next() {
+            Some(s) => match s.as_ref() {
+                "-d" => match it.next() {
+                    Some(v) => desc_filename = v,
+                    None => {
+                        eprintln!("args for --desc or -d is required!");
+                        std::process::exit(1);
+                    }
+                }
+                _ => {
+                    eprintln!("unknown option {}", s) ;
+                    std::process::exit(1);
+                }
+            },
+            None => ()
+        }
+        break;
+    }
+    let type_map = match File::open(desc_filename) {
+        Ok(mut desc_file) => parse_file_descriptor_proto_set(&mut desc_file),
+        Err(e) => {
+            eprintln!("Could not read input file. Os says {}.", e);
+            std::process::exit(1);
+        }
+    };
+    parse_any_message(type_map.get("Test").unwrap());
+    println!("{:?}", &type_map);
     // read data streams
     // iterate each field label in there, and read the data
     //  emit the data as JSON
@@ -204,7 +227,7 @@ fn raw_parse(r :&mut Read) -> ProtoBuffer {
     }; 
 }
 
-fn parse_file_descriptor_proto_set(r :&mut Read) {
+fn parse_file_descriptor_proto_set(r :&mut Read) -> HashMap<String, HashMap<u64, SchemaType>> {
     let mut names_to_types = HashMap::new();
     for e in raw_parse(r) {
         match e {
@@ -214,7 +237,7 @@ fn parse_file_descriptor_proto_set(r :&mut Read) {
             _ => ()
         }
     }
-    println!("{:?}", &names_to_types);
+    return names_to_types;
 }
 
 fn parse_file_descriptor_proto(r :&mut Read, 
@@ -637,17 +660,6 @@ fn schema_type(n :u64, meta :Meta) -> SchemaType {
     }
 }
 
-//fn read_vari64(r: &mut Read) -> Result<i64, i64> {
-//	let ux = match read_varu64(r) {
-//		Ok(v) => v,
-//		Err(e) => e
-//	};
-//	let x = ux as i64;// i64::from(ux >> 1);
-	// if ux & 1 != 0 {
-	//	x = ^x;
-	//}
-//	return Ok(x)
-//}
-/*
-	typ := b[0] & 0x07
-*/
+fn parse_any_message(type_map :&HashMap<u64, SchemaType>) {
+
+}

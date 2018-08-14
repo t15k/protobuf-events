@@ -27,82 +27,14 @@ fn main() {
     let type_map = match File::open(desc_filename) {
         Ok(mut desc_file) => parse_file_descriptor_proto_set(&mut desc_file),
         Err(e) => {
-            eprintln!("Could not read input file. Os says {}.", e);
+            eprintln!("Could not read descriptor file. Os says {}.", e);
             std::process::exit(1);
         }
     };
-    parse_any_message(type_map.get("Test").unwrap());
-    println!("{:?}", &type_map);
-    // read data streams
-    // iterate each field label in there, and read the data
-    //  emit the data as JSON
-	// https://github.com/google/protobuf/blob/master/src/google/protobuf/descriptor.proto
-
-	// parse template and create a handler setup
-	// TODO: JSON templates, raw transformation, schema definitions support
-	//let one_handler = |_: & Read| {String::from("hello")};
-	//let two_handler = |_: & Read| String::from("hello");
-	//let mut handlers: std::collections::HashMap<Vec<u64>, &Fn(&Read) -> String> =
-	//	std::collections::HashMap::new();
-	//let mut results: std::collections::HashMap<Vec<u64>, String> =
-	//	std::collections::HashMap::new();
-	//handlers.insert(vec![1], &one_handler);
-	//handlers.insert(vec![1, 1], &two_handler);
-/*	parse(&mut std::io::stdin(), &mut |fid, t, r| {
-		println!("fid = {}, t = {:?}", fid.get(0).unwrap(), t);
-		match t {
-			WireType::VarInt(_) => match read_varu64(r) { // varints signed and unsigned
-				Ok(v) => {
-					println!("{}: {}", fid.get(0).unwrap(), v);
-				}
-				Err(_) => panic!("Error")
-				//Some(h) => h.handle(r),//; err != nil {
-				//None => return
-			},
-			WireType::Bit64 => panic!("fixed64, sfixed64, double not supported"),
-			WireType::LengthDelimeted => { // string, messages and bytes.
-				match read_varu64(r) {
-					Ok(size) =>	{
-						println!("will read {} bytes", size);
-						let mut tak = r.take(size);
-						match handlers.get_mut(fid) {
-							Some(sub_handle) => {
-								// TODO recurse it a message, or pass to message handler
-								// let mut s = String::new();
-								let res_to_insert = sub_handle(&mut tak);
-								let mut s1 = vec![];
-								let mut s = vec![];
-								results.insert(s1, res_to_insert);
-								println!("take limit{}", tak.limit());
-								match tak.read_to_end(&mut s) {
-									Ok(_) => (),//parse_(idf, ), //,panic!(""),
-									Err(e) => {
-										panic!(format!("{}", e));
-									}
-								}
-							},
-							None => {
-								let mut buf = [0; 1];
-								for _ in (1..size).rev() {
-									tak.read(&mut buf);
-								}
-							}
-						}
-					},
-					Err(_) => ()
-				}
-				// would have called something on e
-				// read bytes a skip
-				//panic!("string, bytes, embedded messages, packed repeated fields not supported");
-			},
-			WireType::StartGroup => panic!("start groups (deprecated) not supported"),
-			WireType::EndGroup => panic!("end groups (deprecated) not supported"),
-			WireType::Bit32 => panic!("fixed32, sfixed32, float not supported"),
-		}
-		println!("field: {},  type: {:?}.", fid.get(0).unwrap(), t);
-	});*/
-	//a.parse_bytes(&mut &b[..]);
-	println!("I made it");
+	// TODO something should tell the root message type!
+    parse_any_message(&mut std::io::stdin(), type_map.get("Test").unwrap());
+    //println!("{:?}", &type_map);
+	//println!("I made it");
 }
 
 #[derive(Debug, Clone)]
@@ -115,6 +47,19 @@ enum WireType {
     Bit32(u32),
     Unknown(u8, u32)
 }
+
+fn field_id(wt :WireType) -> u32 {
+	return match wt {
+	    WireType::VarInt(id) => id,
+	    WireType::Bit64(id) => id,
+	    WireType::LengthDelimited(id) => id,
+	    WireType::StartGroup => panic!("Start Group not supported"),
+	    WireType::EndGroup => panic!("End group not supported"),
+	    WireType::Bit32(id) => id,
+	    WireType::Unknown(_, id) => id
+	}
+}
+
 #[derive(Debug, Clone)]
 enum WireField {
     VarInt(u32, u64),
@@ -150,7 +95,7 @@ enum SchemaType {
 #[derive(Debug, Clone)]
 struct Meta {
     name :String,
-    field_number: u64,
+    field_number: u32,
     repeated :bool
 }
 
@@ -215,7 +160,7 @@ impl <'a> Iterator for ProtoBuffer <'a>{
             },
             Err(ReadStatus::Empty) => None,
             Err(e) => {
-                println!("{:?}", e);
+                println!("ERROR: {:?}", e);
                 panic!("")}
         };
     }
@@ -227,7 +172,7 @@ fn raw_parse(r :&mut Read) -> ProtoBuffer {
     }; 
 }
 
-fn parse_file_descriptor_proto_set(r :&mut Read) -> HashMap<String, HashMap<u64, SchemaType>> {
+fn parse_file_descriptor_proto_set(r :&mut Read) -> HashMap<String, HashMap<u32, SchemaType>> {
     let mut names_to_types = HashMap::new();
     for e in raw_parse(r) {
         match e {
@@ -241,20 +186,20 @@ fn parse_file_descriptor_proto_set(r :&mut Read) -> HashMap<String, HashMap<u64,
 }
 
 fn parse_file_descriptor_proto(r :&mut Read, 
-                               type_names :&mut HashMap<String, HashMap<u64, SchemaType>>) {
+                               type_names :&mut HashMap<String, HashMap<u32, SchemaType>>) {
     let mut package_name = String::from(""); // TODO we can be more clever
     for e in raw_parse(r) {
         match e {
             WireField::LengthDelimited(1, v) => {
                 match String::from_utf8(v) {
-                    Ok(s) => println!("{:?}", s),
-                    Err(e)=> println!("{:?}", e)
+                    Ok(s) => (),//println!("OK: {:?}", s),
+                    Err(e)=> eprintln!("ERR: {:?}", e)
                 }
             },
             WireField::LengthDelimited(2, v) => {
                 match String::from_utf8(v) {
                     Ok(s) => package_name = s,
-                    Err(e) => println!("{:?}", e)
+                    Err(e) => println!("ERR: {:?}", e)
                 }
             },
             WireField::LengthDelimited(4, v) => {
@@ -262,13 +207,13 @@ fn parse_file_descriptor_proto(r :&mut Read,
                 type_names.insert(name, map);
                 // TODO use return value
             },
-            _ => println!("{:?}", e)
+            _ => ()
         }
     }
 }
 
 /// Parse a message descriptor.
-fn parse_descriptor_proto<'a>(r :&mut Read) -> (String, HashMap<u64, SchemaType>) {
+fn parse_descriptor_proto<'a>(r :&mut Read) -> (String, HashMap<u32, SchemaType>) {
     let mut message_name = String::from(""); 
     let mut field_map = HashMap::new();
     for e in raw_parse(r) {
@@ -287,7 +232,7 @@ fn parse_descriptor_proto<'a>(r :&mut Read) -> (String, HashMap<u64, SchemaType>
     return (message_name, field_map);;
 }
 
-fn parse_field_descriptor_proto(r :&mut Read) -> (u64, SchemaType) {
+fn parse_field_descriptor_proto(r :&mut Read) -> (u32, SchemaType) {
     let mut meta = Meta{
         field_number: 0,
         name: String::from(""),
@@ -300,7 +245,7 @@ fn parse_field_descriptor_proto(r :&mut Read) -> (u64, SchemaType) {
                 Ok(s) => meta.name = s,
                 Err(e) => println!("{:?}", e) // TODO, Error handling.
             },
-            WireField::VarInt(3, n) => meta.field_number = n,
+            WireField::VarInt(3, n) => meta.field_number = n as u32,
             WireField::VarInt(4, n) => meta.repeated = n == 3, // 3 is enum REPATED
             WireField::VarInt(5, n) => raw_type = n,
             _ => ()
@@ -660,6 +605,72 @@ fn schema_type(n :u64, meta :Meta) -> SchemaType {
     }
 }
 
-fn parse_any_message(type_map :&HashMap<u64, SchemaType>) {
+fn parse_any_message(r :&mut Read, type_map :&HashMap<u32, SchemaType>) {
+	// TODO support repeated fields
+	print!("{{");
+	let mut last_output = false;
+	
+	for wf in raw_parse(r) {
+		let mut was_output = true; // assume success		
+		match wf {
+			WireField::VarInt(fid, v) =>  match type_map.get(&fid) {
+					Some(map_type_v) => match map_type_v {
+						SchemaType::Int32(m) => print_json(&m.name, &(v as i32), last_output),
+						SchemaType::Int64(m) => print_json(&m.name, &v, last_output),
+						SchemaType::UInt32(m) => print_json(&m.name, &(v as u32), last_output),
+						SchemaType::UInt64(m) => print_json(&m.name, &(v as u64), last_output),
+						SchemaType::SInt32(m) => was_output = false,// TODO ZIGZAG
+						SchemaType::SInt64(m) => was_output = false,// TODO ZIGZAG
+						SchemaType::Bool(m) => print_json_bool(&m.name, v > 0, last_output),
+						SchemaType::Enum(m) => (),
+						_ => was_output = false // Unknown combi, ignore
+					},
+					None => () //ignore
+			},
+			WireField::Bit64(fid, v) => {was_output = false
+				// fixed64, sfixed64, double
+			},
+			WireField::LengthDelimited(fid, v) => match type_map.get(&fid) {
+				Some(SchemaType::String(m)) => match String::from_utf8(v) {
+					Ok(s) => print_json_string(&m.name, &s, last_output),
+					Err(_) => () // ignore corrupt string
+				},
+				Some(SchemaType::Bytes(m)) => was_output = false,
+				Some(SchemaType::Message(m)) => was_output = false,
+				// TODO Support packed repeated fields
+				Some(_) => was_output = false, // Unknown combi, ignore
+				None => was_output = false // unknown field, ignore
+			},
+			WireField::Bit32(fid, v) => {was_output = false
+				// fixed32, sfixed32, float
+			},
+			WireField::StartGroup => was_output = false,
+			WireField::EndGroup => was_output = false,
+			WireField::Unknown(_, _) => was_output = false
+		}
+		last_output = was_output | last_output;
+	}
+	print!("}}");
+}
 
+/// For all non string or non bool values.
+fn print_json(field_name: &String, value :&std::fmt::Display, comma :bool) {
+	if comma { print!(","); }
+	print!("\"{}\": {}", field_name, value);
+}
+
+/// For all string values.
+fn print_json_string(field_name: &String, value :&std::fmt::Display, comma :bool) {
+	if comma { print!(","); }
+	print!("\"{}\":\"{}\"", field_name, value);
+}
+
+/// For all bool values.
+fn print_json_bool(field_name: &String, value :bool, comma :bool) {
+	if comma { print!(","); }
+	if value {
+		print!("\"{}\":true", field_name);
+	} else {
+		print!("\"{}\":false", field_name);
+	}
 }

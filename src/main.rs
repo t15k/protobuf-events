@@ -80,6 +80,62 @@ enum SchemaType {
     Group(Meta),
     Unknown
 }
+
+struct SchemaField {
+    name :String,
+    field_number: u32,
+    repeated :bool,
+    kind :SchemaType2
+}
+
+#[derive(Debug)]
+enum SchemaType2 {
+    Double,
+    Float,
+    Int32,
+    Int64,
+    UInt32,
+    UInt64,
+    SInt32,
+    SInt64,
+    Fixed32,
+    Fixed64,
+    SFixed32,
+    SFixed64,
+    Bool,
+    String,
+    Bytes,
+    Message,
+    Enum,
+    Group,
+    Unknown
+}
+
+fn schema_type2(n :u64) -> SchemaType2 {
+    return match n {
+        1 => SchemaType2::Double,
+        2 => SchemaType2::Float,
+        3 => SchemaType2::Int64,
+        4 => SchemaType2::UInt64,
+        5 => SchemaType2::Int32,
+        6 => SchemaType2::Fixed64,
+        7 => SchemaType2::Fixed32,
+        8 => SchemaType2::Bool,
+        9 => SchemaType2::String,
+        10 => SchemaType2::Group,
+        11 => SchemaType2::Message,
+        12 => SchemaType2::Bytes,
+        13 => SchemaType2::UInt32,
+        14 => SchemaType2::Enum,
+        15 => SchemaType2::SFixed32,
+        16 => SchemaType2::SFixed64,
+        17 => SchemaType2::SInt32,
+        18 => SchemaType2::SInt64,
+        _ => SchemaType2::String
+    }
+}
+
+
 #[derive(Debug, Clone)]
 struct Meta {
     name :String,
@@ -160,7 +216,7 @@ fn raw_parse(r :&mut Read) -> ProtoBuffer {
     }; 
 }
 
-fn parse_file_descriptor_proto_set(r :&mut Read) -> HashMap<String, HashMap<u32, SchemaType>> {
+fn parse_file_descriptor_proto_set(r :&mut Read) -> HashMap<String, HashMap<u32, SchemaField>> {
     let mut names_to_types = HashMap::new();
     for e in raw_parse(r) {
         match e {
@@ -174,7 +230,7 @@ fn parse_file_descriptor_proto_set(r :&mut Read) -> HashMap<String, HashMap<u32,
 }
 
 fn parse_file_descriptor_proto(r :&mut Read, 
-                               type_names :&mut HashMap<String, HashMap<u32, SchemaType>>) {
+                               type_names :&mut HashMap<String, HashMap<u32, SchemaField>>) {
     let mut package_name = String::from(""); // TODO we can be more clever
     for e in raw_parse(r) {
         match e {
@@ -201,7 +257,7 @@ fn parse_file_descriptor_proto(r :&mut Read,
 }
 
 /// Parse a message descriptor.
-fn parse_descriptor_proto<'a>(r :&mut Read) -> (String, HashMap<u32, SchemaType>) {
+fn parse_descriptor_proto<'a>(r :&mut Read) -> (String, HashMap<u32, SchemaField>) {
     let mut message_name = String::from(""); 
     let mut field_map = HashMap::new();
     for e in raw_parse(r) {
@@ -211,8 +267,8 @@ fn parse_descriptor_proto<'a>(r :&mut Read) -> (String, HashMap<u32, SchemaType>
                 Err(e) => println!("{:?}", e) // TODO
             },
             WireField::LengthDelimited(2, v) => {
-                let (field_no, typ) = parse_field_descriptor_proto(&mut &v[..]);
-                field_map.insert(field_no, typ);
+                let schema_field = parse_field_descriptor_proto(&mut &v[..]);
+                field_map.insert(schema_field.field_number, schema_field);
             }
             _ => ()
         }
@@ -220,11 +276,12 @@ fn parse_descriptor_proto<'a>(r :&mut Read) -> (String, HashMap<u32, SchemaType>
     return (message_name, field_map);;
 }
 
-fn parse_field_descriptor_proto(r :&mut Read) -> (u32, SchemaType) {
-    let mut meta = Meta{
+fn parse_field_descriptor_proto(r :&mut Read) -> SchemaField {
+    let mut meta = SchemaField{
         field_number: 0,
         name: String::from(""),
-        repeated: false
+        repeated: false,
+        kind: SchemaType2::Unknown
     };
     let mut raw_type = 0;
     for e in raw_parse(r) {
@@ -235,11 +292,12 @@ fn parse_field_descriptor_proto(r :&mut Read) -> (u32, SchemaType) {
             },
             WireField::VarInt(3, n) => meta.field_number = n as u32,
             WireField::VarInt(4, n) => meta.repeated = n == 3, // 3 is enum REPATED
-            WireField::VarInt(5, n) => raw_type = n,
+            WireField::VarInt(5, n) => meta.kind = schema_type2(n),
             _ => ()
         }
     }
-    return (meta.field_number, schema_type(raw_type, meta));
+    return meta;
+    //return (meta.field_number, schema_type(raw_type, meta));
 }
 
 #[test]
@@ -447,8 +505,9 @@ fn schema_type(n :u64, meta :Meta) -> SchemaType {
     }
 }
 
-fn parse_any_message(r :&mut Read, type_map :&HashMap<u32, SchemaType>) {
-	// TODO support repeated fields
+fn parse_any_message(r :&mut Read, type_map :&HashMap<u32, SchemaField>) {
+	// TODO support repeated fields other than strings
+    let mut arrays :HashMap<u32, Vec<String>> = HashMap::new();
 	print!("{{");
 	let mut last_output = false;
 	
@@ -456,15 +515,15 @@ fn parse_any_message(r :&mut Read, type_map :&HashMap<u32, SchemaType>) {
 		let mut was_output = true; // assume success		
 		match wf {
 			WireField::VarInt(fid, v) =>  match type_map.get(&fid) {
-					Some(map_type_v) => match map_type_v {
-						SchemaType::Int32(m) => print_json(&m.name, &(v as i32), last_output),
-						SchemaType::Int64(m) => print_json(&m.name, &v, last_output),
-						SchemaType::UInt32(m) => print_json(&m.name, &(v as u32), last_output),
-						SchemaType::UInt64(m) => print_json(&m.name, &(v as u64), last_output),
-						SchemaType::SInt32(m) => was_output = false,// TODO ZIGZAG
-						SchemaType::SInt64(m) => was_output = false,// TODO ZIGZAG
-						SchemaType::Bool(m) => print_json_bool(&m.name, v > 0, last_output),
-						SchemaType::Enum(m) => (),
+					Some(map_type_v) => match map_type_v.kind {
+						SchemaType2::Int32 => print_json(&map_type_v.name, &(v as i32), last_output),
+						SchemaType2::Int64 => print_json(&map_type_v.name, &v, last_output),
+						SchemaType2::UInt32 => print_json(&map_type_v.name, &(v as u32), last_output),
+						SchemaType2::UInt64 => print_json(&map_type_v.name, &(v as u64), last_output),
+						SchemaType2::SInt32 => was_output = false,// TODO ZIGZAG
+						SchemaType2::SInt64 => was_output = false,// TODO ZIGZAG
+						SchemaType2::Bool => print_json_bool(&map_type_v.name, v > 0, last_output),
+						SchemaType2::Enum => (),
 						_ => was_output = false // Unknown combi, ignore
 					},
 					None => () //ignore
@@ -473,15 +532,17 @@ fn parse_any_message(r :&mut Read, type_map :&HashMap<u32, SchemaType>) {
 				// fixed64, sfixed64, double
 			},
 			WireField::LengthDelimited(fid, v) => match type_map.get(&fid) {
-				Some(SchemaType::String(m)) => match String::from_utf8(v) {
-					Ok(s) => print_json_string(&m.name, &s, last_output),
-					Err(_) => () // ignore corrupt string
-				},
-				Some(SchemaType::Bytes(m)) => was_output = false,
-				Some(SchemaType::Message(m)) => was_output = false,
-				// TODO Support packed repeated fields
-				Some(_) => was_output = false, // Unknown combi, ignore
-				None => was_output = false // unknown field, ignore
+                Some(schema_field) => match &schema_field.kind {
+                    SchemaType2::String => match String::from_utf8(v) {
+				    	Ok(s) => out_json(schema_field, json_token(&s), &mut arrays, last_output), //print_json_string(&m.name, &s, last_output),
+					    Err(_) => () // ignore corrupt string
+				    },
+				    SchemaType2::Bytes => was_output = false, // TODO // bytes
+				    SchemaType2::Message => was_output = false, // TODO inner message
+				    // TODO Support packed repeated fields
+				    _ => was_output = false // Unknown combi, ignore
+                },
+			    None => was_output = false // unknown field, ignore
 			},
 			WireField::Bit32(fid, v) => {was_output = false
 				// fixed32, sfixed32, float
@@ -492,9 +553,36 @@ fn parse_any_message(r :&mut Read, type_map :&HashMap<u32, SchemaType>) {
 		}
 		last_output = was_output | last_output;
 	}
+    for (k, array_v) in arrays.iter() {
+        let mut acomma = false;
+        if last_output { print!(",")};
+        print!("\"{}\":[", &type_map.get(&k).unwrap().name);
+        for a in array_v {
+            if acomma { print!(","); }
+            acomma = true;
+            print!("{}", a);
+        }
+        print!("]");
+    }
 	print!("}}");
 }
 
+fn out_json(meta :&SchemaField, json_v :String, m :&mut HashMap<u32, Vec<String>>, comma :bool) {
+    if meta.repeated {
+        if m.contains_key(&meta.field_number) {
+            m.get_mut(&meta.field_number).unwrap().push(json_v);
+        } else {
+            m.insert(meta.field_number, vec!(json_v));
+        }
+    } else {
+        print_json(&meta.name, &json_v, comma);
+    }
+}
+
+
+fn json_token(v :&String) -> String {
+    return format!("\"{}\"", v);
+}
 /// For all non string or non bool values.
 fn print_json(field_name: &String, value :&std::fmt::Display, comma :bool) {
 	if comma { print!(","); }

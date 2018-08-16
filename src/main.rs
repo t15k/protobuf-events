@@ -178,11 +178,6 @@ struct ProtoBuffer <'a> {
     read: &'a mut Read,
 }
 
-impl <'a> ProtoBuffer <'a> {
-    fn read_bytes(&mut self) -> Result<Vec<u8>, std::io::Error> {
-        return read_bytes(self.read);
-    }
-}
 impl <'a> Iterator for ProtoBuffer <'a>{
     type Item = WireField;
     fn next(&mut self) -> Option<Self::Item> {
@@ -501,37 +496,6 @@ fn zigzag64_decoding() {
 // ------------------------------
 // High level readers
 // ------------------------------
-fn read_int32(i :u64) -> i32 {
-    return i as i32;
-}
-
-fn read_string(v :Vec<u8>) -> Result<String, std::string::FromUtf8Error> {
-    return String::from_utf8(v);
-}
-
-fn schema_type(n :u64, meta :Meta) -> SchemaType {
-    return match n {
-        1 => SchemaType::Double(meta),
-        2 => SchemaType::Float(meta),
-        3 => SchemaType::Int64(meta),
-        4 => SchemaType::UInt64(meta),
-        5 => SchemaType::Int32(meta),
-        6 => SchemaType::Fixed64(meta),
-        7 => SchemaType::Fixed32(meta),
-        8 => SchemaType::Bool(meta),
-        9 => SchemaType::String(meta),
-        10 => SchemaType::Group(meta),
-        11 => SchemaType::Message(meta),
-        12 => SchemaType::Bytes(meta),
-        13 => SchemaType::UInt32(meta),
-        14 => SchemaType::Enum(meta),
-        15 => SchemaType::SFixed32(meta),
-        16 => SchemaType::SFixed64(meta),
-        17 => SchemaType::SInt32(meta),
-        18 => SchemaType::SInt64(meta),
-        _ => SchemaType::String(meta)
-    }
-}
 
 fn parse_any_message(r :&mut Read, type_map :&HashMap<u32, SchemaField>) {
 	// TODO support repeated fields other than strings
@@ -547,18 +511,18 @@ fn parse_any_message(r :&mut Read, type_map :&HashMap<u32, SchemaField>) {
 		let mut was_output = true; // assume success		
 		match wf {
 			WireField::VarInt(fid, v) =>  match type_map.get(&fid) {
-					Some(map_type_v) => match map_type_v.kind {
-						SchemaType2::Int32 =>  f(map_type_v, json_token(&(v as i32))),
-						SchemaType2::Int64 => f(map_type_v, json_token(&v)),
-						SchemaType2::UInt32 => f(map_type_v, json_token(&(v as u32))),
-						SchemaType2::UInt64 => f(map_type_v, json_token(&(v as u64))),
-						SchemaType2::SInt32 => f(map_type_v, json_token(&decode_zigzag32(v))),
-						SchemaType2::SInt64 => f(map_type_v, json_token(&decode_zigzag64(v))),
-						SchemaType2::Bool => (), //print_json_bool(&map_type_v.name, v > 0, last_output),
-						SchemaType2::Enum => (),
-						_ => was_output = false // Unknown combi, ignore
-					},
-					None => () //ignore
+                Some(map_type_v) => match map_type_v.kind {
+                    SchemaType2::Int32 =>  f(map_type_v, json_token(&(v as i32))),
+                    SchemaType2::Int64 => f(map_type_v, json_token(&v)),
+                    SchemaType2::UInt32 => f(map_type_v, json_token(&(v as u32))),
+                    SchemaType2::UInt64 => f(map_type_v, json_token(&(v as u64))),
+                    SchemaType2::SInt32 => f(map_type_v, json_token(&decode_zigzag32(v))),
+                    SchemaType2::SInt64 => f(map_type_v, json_token(&decode_zigzag64(v))),
+                    SchemaType2::Bool => f(map_type_v, json_bool_token(v)),
+                    SchemaType2::Enum => (),
+                    _ => was_output = false // Unknown combi, ignore
+                },
+                None => () //ignore
 			},
 			WireField::Bit64(fid, v) => {was_output = false
 				// fixed64, sfixed64, double
@@ -566,12 +530,11 @@ fn parse_any_message(r :&mut Read, type_map :&HashMap<u32, SchemaField>) {
 			WireField::LengthDelimited(fid, v) => match type_map.get(&fid) {
                 Some(schema_field) => match &schema_field.kind {
                     SchemaType2::String => match String::from_utf8(v) {
-				    	Ok(s) => f(schema_field, json_string_token(&s)),
+				    	Ok(s) => f(schema_field, json_str_token(&s)),
 					    Err(_) => () // ignore corrupt string
 				    },
-				    SchemaType2::Bytes => {
-                        f(schema_field, json_string_token(&base64::encode(&v)));
-                    },//was_output = false, //
+				    SchemaType2::Bytes =>
+                        f(schema_field, json_str_token(&base64::encode(&v))),//was_output = false, //
 				    SchemaType2::Message => was_output = false, // TODO inner message
 				    // TODO Support packed repeated fields
 				    _ => was_output = false // Unknown combi, ignore
@@ -615,28 +578,18 @@ fn out_json(meta :&SchemaField, json_v :String, m :&mut HashMap<u32, Vec<String>
 }
 
 
-fn json_string_token(v :&String) -> String {
+fn json_str_token(v :&String) -> String {
     return format!("\"{}\"", v);
+}
+fn json_bool_token(v :u64) -> String {
+    return match v {
+        0 => "false".to_string(),
+        _ => "true".to_string()
+    }
 }
 fn json_token(v :&std::fmt::Display) -> String  { return format!("{}", v); }
 /// For all non string or non bool values.
 fn print_json(field_name: &String, value :&std::fmt::Display, comma :bool) {
 	if comma { print!(","); }
 	print!("\"{}\": {}", field_name, value);
-}
-
-/// For all string values.
-fn print_json_string(field_name: &String, value :&std::fmt::Display, comma :bool) {
-	if comma { print!(","); }
-	print!("\"{}\":\"{}\"", field_name, value);
-}
-
-/// For all bool values.
-fn print_json_bool(field_name: &String, value :bool, comma :bool) {
-	if comma { print!(","); }
-	if value {
-		print!("\"{}\":true", field_name);
-	} else {
-		print!("\"{}\":false", field_name);
-	}
 }

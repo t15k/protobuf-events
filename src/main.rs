@@ -2,6 +2,11 @@ use std::io::Read;
 use std::fs::File;
 use std::collections::HashMap;
 
+extern crate base64;
+
+// TODO inner mesage
+// TODO BOOL
+
 fn main() {
     let mut desc_filename = String::from("");
     let mut it = std::env::args().skip(1);
@@ -470,6 +475,29 @@ fn read_fixedu64(r : &mut Read) -> u64 {
     return n;
 }
 
+fn decode_zigzag32(n :u64) -> i32 {
+    return ((n >> 1) ^ (-((n & 1) as i64)) as u64) as i32
+}
+#[test]
+fn zigzag32_decoding() {
+    assert_eq!(-1, decode_zigzag32(1));
+    assert_eq!(1, decode_zigzag32(2));
+    assert_eq!(-2, decode_zigzag32(3));
+    assert_eq!(2147483647, decode_zigzag32(4294967294));
+    assert_eq!(-2147483648, decode_zigzag32(4294967295));
+}
+
+fn decode_zigzag64(n :u64) -> i64{
+    return ((n >> 1) ^ (-((n & 1) as i64)) as u64) as i64
+}
+#[test]
+fn zigzag64_decoding() {
+    assert_eq!(-1, decode_zigzag64(1));
+    assert_eq!(1, decode_zigzag64(2));
+    assert_eq!(-2, decode_zigzag64(3));
+    assert_eq!(2147483648, decode_zigzag64(4294967296));
+    assert_eq!(-2147483649, decode_zigzag64(4294967297));
+}
 // ------------------------------
 // High level readers
 // ------------------------------
@@ -510,19 +538,23 @@ fn parse_any_message(r :&mut Read, type_map :&HashMap<u32, SchemaField>) {
     let mut arrays :HashMap<u32, Vec<String>> = HashMap::new();
 	print!("{{");
 	let mut last_output = false;
-	
+    {
+	let mut f = |x, z| {
+        out_json(x, z, &mut arrays, last_output);
+        last_output = true;
+    };
 	for wf in raw_parse(r) {
 		let mut was_output = true; // assume success		
 		match wf {
 			WireField::VarInt(fid, v) =>  match type_map.get(&fid) {
 					Some(map_type_v) => match map_type_v.kind {
-						SchemaType2::Int32 => print_json(&map_type_v.name, &(v as i32), last_output),
-						SchemaType2::Int64 => print_json(&map_type_v.name, &v, last_output),
-						SchemaType2::UInt32 => print_json(&map_type_v.name, &(v as u32), last_output),
-						SchemaType2::UInt64 => print_json(&map_type_v.name, &(v as u64), last_output),
-						SchemaType2::SInt32 => was_output = false,// TODO ZIGZAG
-						SchemaType2::SInt64 => was_output = false,// TODO ZIGZAG
-						SchemaType2::Bool => print_json_bool(&map_type_v.name, v > 0, last_output),
+						SchemaType2::Int32 =>  f(map_type_v, json_token(&(v as i32))),
+						SchemaType2::Int64 => f(map_type_v, json_token(&v)),
+						SchemaType2::UInt32 => f(map_type_v, json_token(&(v as u32))),
+						SchemaType2::UInt64 => f(map_type_v, json_token(&(v as u64))),
+						SchemaType2::SInt32 => f(map_type_v, json_token(&decode_zigzag32(v))),
+						SchemaType2::SInt64 => f(map_type_v, json_token(&decode_zigzag64(v))),
+						SchemaType2::Bool => (), //print_json_bool(&map_type_v.name, v > 0, last_output),
 						SchemaType2::Enum => (),
 						_ => was_output = false // Unknown combi, ignore
 					},
@@ -534,10 +566,12 @@ fn parse_any_message(r :&mut Read, type_map :&HashMap<u32, SchemaField>) {
 			WireField::LengthDelimited(fid, v) => match type_map.get(&fid) {
                 Some(schema_field) => match &schema_field.kind {
                     SchemaType2::String => match String::from_utf8(v) {
-				    	Ok(s) => out_json(schema_field, json_token(&s), &mut arrays, last_output), //print_json_string(&m.name, &s, last_output),
+				    	Ok(s) => f(schema_field, json_string_token(&s)),
 					    Err(_) => () // ignore corrupt string
 				    },
-				    SchemaType2::Bytes => was_output = false, // TODO // bytes
+				    SchemaType2::Bytes => {
+                        f(schema_field, json_string_token(&base64::encode(&v)));
+                    },//was_output = false, //
 				    SchemaType2::Message => was_output = false, // TODO inner message
 				    // TODO Support packed repeated fields
 				    _ => was_output = false // Unknown combi, ignore
@@ -551,8 +585,9 @@ fn parse_any_message(r :&mut Read, type_map :&HashMap<u32, SchemaField>) {
 			WireField::EndGroup => was_output = false,
 			WireField::Unknown(_, _) => was_output = false
 		}
-		last_output = was_output | last_output;
+		//last_output = was_output | last_output;
 	}
+    }
     for (k, array_v) in arrays.iter() {
         let mut acomma = false;
         if last_output { print!(",")};
@@ -580,9 +615,10 @@ fn out_json(meta :&SchemaField, json_v :String, m :&mut HashMap<u32, Vec<String>
 }
 
 
-fn json_token(v :&String) -> String {
+fn json_string_token(v :&String) -> String {
     return format!("\"{}\"", v);
 }
+fn json_token(v :&std::fmt::Display) -> String  { return format!("{}", v); }
 /// For all non string or non bool values.
 fn print_json(field_name: &String, value :&std::fmt::Display, comma :bool) {
 	if comma { print!(","); }

@@ -4,9 +4,7 @@ use std::collections::HashMap;
 
 extern crate base64;
 
-// TODO inner mesage
-// TODO fixed, and float 64
-// TODO fixed, and float 32
+// TODO Support packed repeated fields
 
 fn main() {
     let mut desc_filename = String::from("");
@@ -127,32 +125,6 @@ struct Meta {
     repeated :bool
 }
 
-enum Field {
-    PDouble(u32, f64),
-    PFloat(u32, f32),
-    PInt32(u32, i32),
-    PInt64(u32, i64),
-    PUInt32(u32, u32),
-    PUInt64(u32, u64),
-    PSInt32(u32, i32),
-    PSInt64(u32, i32),
-    PFixed32(u32, u32),
-    PFixed64(u32, u64),
-    PSfixed32(u32, i32),
-    PSfixed64(u32, i64),
-    PBool(u32, bool),
-    PString(u32, String),
-    PBytes(u32, Vec<u8>),
-    PMessage,
-    PEnum,
-    PWireVarInt,
-    PWireBit64,
-    PWireLengthDelimeted,
-    PWireStartGroup,
-    PWireBit32,
-    PWireUnknown
-}
-
 struct ProtoBuffer <'a> {
     read: &'a mut Read,
 }
@@ -262,7 +234,6 @@ fn parse_field_descriptor_proto(r :&mut Read) -> SchemaField {
         repeated: false,
         kind: SchemaType2::Unknown
     };
-    let mut raw_type = 0;
     for e in raw_parse(r) {
         match e {
             WireField::LengthDelimited(1, v) => match String::from_utf8(v) {
@@ -276,29 +247,6 @@ fn parse_field_descriptor_proto(r :&mut Read) -> SchemaField {
         }
     }
     return meta;
-    //return (meta.field_number, schema_type(raw_type, meta));
-}
-
-#[test]
-fn test_do_like_this() {
-	let mut reg :std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
-	reg.insert(1, 2);
-	let r = [1u8, 2];
-	let mut re = &r[..];
-	let mut count = 0;
-	for res in Iter(&mut re) {
-		match res {
-			Ok((k, _, _)) => { // was v, t
-				count += 1;
-				match reg.get(&k) {
-					Some(_) => {println!("HELLO");read_varu64(&mut &r[..]);},//handle(v), // was h
-					None => continue
-				}
-			}
-			Err(_) => ()
-		}
-	}
-	assert_eq!(2, count);
 }
 
 /// Read the next field tag (not it's value) from r.
@@ -418,23 +366,14 @@ fn read_bytes<'a>(r :&'a mut Read) -> Result<Vec<u8>, std::io::Error> {
 }
 fn read_fixedu32(r : &mut Read) -> u32 {
     let mut buf = [0; 4];
-    let mut n :u32 = 0;
     r.read_exact(&mut buf);
-    for e in buf.iter() {
-        n = n << 8;
-        n +=  *e as u32;
-    }
-    return n;
+    return buf[0] as u32 
+        | (buf[1] as u32) << 8 
+        | (buf[2] as u32) << 16
+        | (buf[3] as u32) << 24;
 }
 fn read_fixedu64(r : &mut Read) -> u64 {
-    let mut buf = [0; 8];
-    let mut n :u64 = 0;
-    r.read_exact(&mut buf);
-    for e in buf.iter() {
-        n = n << 8;
-        n +=  *e as u64;
-    }
-    return n;
+    return (read_fixedu32(r) as u64)| (read_fixedu32(r) as u64) << 32;
 }
 
 fn decode_zigzag32(n :u64) -> i32 {
@@ -460,12 +399,39 @@ fn zigzag64_decoding() {
     assert_eq!(2147483648, decode_zigzag64(4294967296));
     assert_eq!(-2147483649, decode_zigzag64(4294967297));
 }
+fn decode_sfixed32(n :u32) -> i32 { return n as i32;}
+
+fn decode_fixed32(n :u32) -> u32 { return n;}
+
+fn decode_float(n :u32) -> f32 { return f32::from_bits(n); }
+#[test]
+fn float_decoding() {
+    let a = [205, 204, 204, 63];
+    let n = read_fixedu32(&mut &a[..]);
+    let f = decode_float(n);
+    assert_eq!(1.6, f);
+}
+
+fn decode_sfixed64(n :u64) -> i64 { return n as i64; }
+
+fn decode_fixed64(n :u64) -> u64 { return n as u64; }
+
+fn decode_double(n :u64) -> f64 { return f64::from_bits(n); }
+#[test]
+fn double_decoding() {
+    let a = [51, 51, 51, 51, 51, 51, 3, 64];
+    let n = read_fixedu64(&mut &a[..]);
+    let f = decode_double(n);
+    assert_eq!(2.4, f);
+
+
+}
+
 // ------------------------------
 // High level readers
 // ------------------------------
 
 fn parse_any_message(r :&mut Read, type_map :&HashMap<u32, SchemaField>) {
-	// TODO support repeated fields other than strings    
     let mut arrays :HashMap<u32, Vec<String>> = HashMap::new();
 	print!("{{");
 	let mut last_output = false;
@@ -478,7 +444,6 @@ fn parse_any_message(r :&mut Read, type_map :&HashMap<u32, SchemaField>) {
         out_json(x, z, &mut arrays, c);
     };
 	for wf in raw_parse(r) {
-		let mut was_output = true; // assume success		
 		match wf {
 			WireField::VarInt(fid, v) =>  match type_map.get(&fid) {
                 Some(map_type_v) => match map_type_v.kind {
@@ -490,12 +455,18 @@ fn parse_any_message(r :&mut Read, type_map :&HashMap<u32, SchemaField>) {
                     SchemaType2::SInt64 => f(map_type_v, json_token(&decode_zigzag64(v)), &mut c),
                     SchemaType2::Bool => f(map_type_v, json_bool_token(v), &mut c),
                     SchemaType2::Enum => (),
-                    _ => was_output = false // Unknown combi, ignore
+                    _ => () // Unknown combi, ignore
                 },
                 None => () //ignore
 			},
-			WireField::Bit64(fid, v) => {was_output = false
-				// fixed64, sfixed64, double
+			WireField::Bit64(fid, v) => match type_map.get(&fid) {
+                Some(schema_field) => match &schema_field.kind {
+                SchemaType2::SFixed64 => f(schema_field, json_token(&decode_sfixed64(v)), &mut c),
+                SchemaType2::Fixed64 => f(schema_field, json_token(&decode_fixed64(v)), &mut c),
+                SchemaType2::Double => f(schema_field, json_token(&decode_double(v)), &mut c),
+                    _ => () // ignore
+                },
+                None => () // ignore
 			},
 			WireField::LengthDelimited(fid, v) => match type_map.get(&fid) {
                 Some(schema_field) => match &schema_field.kind {
@@ -509,13 +480,18 @@ fn parse_any_message(r :&mut Read, type_map :&HashMap<u32, SchemaField>) {
                         c();
                         parse_sub_message(&mut &v[..], &schema_field.name, type_map, false);
                     },
-				    // TODO Support packed repeated fields
-				    _ => was_output = false // Unknown combi, ignore
+				    _ => () // Unknown combi, ignore
                 },
-			    None => was_output = false // unknown field, ignore
+			    None => () // unknown field, ignore
 			},
-			WireField::Bit32(fid, v) => {was_output = false
-				// fixed32, sfixed32, float
+			WireField::Bit32(fid, v) => match type_map.get(&fid) {
+                Some(schema_field) => match &schema_field.kind {
+                    SchemaType2::SFixed32 => f(schema_field, json_token(&decode_sfixed32(v)), &mut c),
+                    SchemaType2::Fixed32 => f(schema_field, json_token(&decode_fixed32(v)), &mut c),
+                    SchemaType2::Float => f(schema_field, json_token(&decode_float(v)), &mut c),
+                    _ => ()
+                },
+                None => () // ignore
 			},
 			WireField::StartGroup => (), // ignore
 			WireField::EndGroup => (), // ignore

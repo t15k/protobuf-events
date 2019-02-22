@@ -460,7 +460,7 @@ fn parse_any_message(r :&mut Read, type_map :&HashMap<u32, SchemaField>) {
                 None => () //ignore
 			},
 			WireField::Bit64(fid, v) => match type_map.get(&fid) {
-                Some(schema_field) => match &schema_field.kind {
+                Some(schema_field) => match schema_field.kind {
                 SchemaType2::SFixed64 => f(schema_field, json_token(&decode_sfixed64(v)), &mut c),
                 SchemaType2::Fixed64 => f(schema_field, json_token(&decode_fixed64(v)), &mut c),
                 SchemaType2::Double => f(schema_field, json_token(&decode_double(v)), &mut c),
@@ -469,7 +469,7 @@ fn parse_any_message(r :&mut Read, type_map :&HashMap<u32, SchemaField>) {
                 None => () // ignore
 			},
 			WireField::LengthDelimited(fid, v) => match type_map.get(&fid) {
-                Some(schema_field) => match &schema_field.kind {
+                Some(schema_field) => match schema_field.kind {
                     SchemaType2::String => match String::from_utf8(v) {
 				    	Ok(s) => f(schema_field, json_str_token(&s), &mut c),
 					    Err(_) => () // ignore corrupt string
@@ -485,7 +485,7 @@ fn parse_any_message(r :&mut Read, type_map :&HashMap<u32, SchemaField>) {
 			    None => () // unknown field, ignore
 			},
 			WireField::Bit32(fid, v) => match type_map.get(&fid) {
-                Some(schema_field) => match &schema_field.kind {
+                Some(schema_field) => match schema_field.kind {
                     SchemaType2::SFixed32 => f(schema_field, json_token(&decode_sfixed32(v)), &mut c),
                     SchemaType2::Fixed32 => f(schema_field, json_token(&decode_fixed32(v)), &mut c),
                     SchemaType2::Float => f(schema_field, json_token(&decode_float(v)), &mut c),

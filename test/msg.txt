@@ -1,0 +1,12 @@
+i32: 1;
+i64: 2;
+si32: 3;
+si64: 4;
+str: "str-value";
+f32: 1.6;
+f64: 2.4;
+inner {
+  i64: 14;
+}
+lots: "str1";
+lots: "str2";

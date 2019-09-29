@@ -126,7 +126,7 @@ struct Meta {
 }
 
 struct ProtoBuffer <'a> {
-    read: &'a mut Read,
+    read: &'a mut dyn Read,
 }
 
 impl <'a> Iterator for ProtoBuffer <'a>{
@@ -161,17 +161,17 @@ impl <'a> Iterator for ProtoBuffer <'a>{
     }
 }
 
-fn raw_parse(r :&mut Read) -> ProtoBuffer {
+fn raw_parse(r :&mut dyn Read) -> ProtoBuffer {
     return ProtoBuffer { 
         read: r 
     }; 
 }
 
-fn parse_file_descriptor_proto_set(r :&mut Read) -> HashMap<String, HashMap<u32, SchemaField>> {
+fn parse_file_descriptor_proto_set(r :&mut dyn Read) -> HashMap<String, HashMap<u32, SchemaField>> {
     let mut names_to_types = HashMap::new();
     for e in raw_parse(r) {
         match e {
-            WireField::LengthDelimited(1, mut v) => {
+            WireField::LengthDelimited(1, v) => {
                 parse_file_descriptor_proto(&mut &v[..], &mut names_to_types);
             },
             _ => ()
@@ -180,7 +180,7 @@ fn parse_file_descriptor_proto_set(r :&mut Read) -> HashMap<String, HashMap<u32,
     return names_to_types;
 }
 
-fn parse_file_descriptor_proto(r :&mut Read, 
+fn parse_file_descriptor_proto(r :&mut dyn Read, 
                                type_names :&mut HashMap<String, HashMap<u32, SchemaField>>) {
     let mut package_name = String::from(""); // TODO we can be more clever
     for e in raw_parse(r) {
@@ -208,7 +208,7 @@ fn parse_file_descriptor_proto(r :&mut Read,
 }
 
 /// Parse a message descriptor.
-fn parse_descriptor_proto<'a>(r :&mut Read) -> (String, HashMap<u32, SchemaField>) {
+fn parse_descriptor_proto<'a>(r :&mut dyn Read) -> (String, HashMap<u32, SchemaField>) {
     let mut message_name = String::from(""); 
     let mut field_map = HashMap::new();
     for e in raw_parse(r) {
@@ -227,7 +227,7 @@ fn parse_descriptor_proto<'a>(r :&mut Read) -> (String, HashMap<u32, SchemaField
     return (message_name, field_map);;
 }
 
-fn parse_field_descriptor_proto(r :&mut Read) -> SchemaField {
+fn parse_field_descriptor_proto(r :&mut dyn Read) -> SchemaField {
     let mut meta = SchemaField{
         field_number: 0,
         name: String::from(""),
@@ -252,7 +252,7 @@ fn parse_field_descriptor_proto(r :&mut Read) -> SchemaField {
 /// Read the next field tag (not it's value) from r.
 /// Advances r to the value following the next tag.
 /// Answers a tuple (field_id, field_type)
-fn read_key(r: &mut Read) -> Result<(WireType), ReadStatus> {
+fn read_key(r: &mut dyn Read) -> Result<(WireType), ReadStatus> {
 	return match read_varu64(r) {
 		Ok(tag) => {
 			Ok(wire_type((tag & 0x07) as u8, (tag >> 3) as u32))
@@ -278,7 +278,7 @@ fn wire_type(wire_type :u8, id :u32) -> WireType {
 // handled by the handler, it will consume bytes from the
 // as a side effect of this.
 trait Handle {
-	fn handle(&self, r: &mut std::io::Read);
+	fn handle(&self, r: &mut dyn std::io::Read);
 }
 trait Sink<T> {
 	fn accept(&mut self, v: T);
@@ -292,7 +292,7 @@ enum ReadStatus {
 }
 
 // read_varu64 reads an unsigned varint from the reader r.
-fn read_varu64(r: &mut Read) -> Result<u64, ReadStatus> {// (uint64, error) {
+fn read_varu64(r: &mut dyn Read) -> Result<u64, ReadStatus> {// (uint64, error) {
 	let mut x: u64 = 0;
 	let mut s: u32 = 0;
 	let i: u32 = 0;
@@ -351,7 +351,7 @@ fn test_read_varu64_to_few_byte(){
 		}
 	}
 }
-fn read_bytes<'a>(r :&'a mut Read) -> Result<Vec<u8>, std::io::Error> {
+fn read_bytes<'a>(r :&'a mut dyn Read) -> Result<Vec<u8>, std::io::Error> {
 	match read_varu64(r) {
 		Ok(l) => {
             let mut t = r.take(l);
@@ -364,15 +364,15 @@ fn read_bytes<'a>(r :&'a mut Read) -> Result<Vec<u8>, std::io::Error> {
 		Err(_) => Err(std::io::Error::new(std::io::ErrorKind::Other, "oh no"))
 	}
 }
-fn read_fixedu32(r : &mut Read) -> u32 {
+fn read_fixedu32(r : &mut dyn Read) -> u32 {
     let mut buf = [0; 4];
-    r.read_exact(&mut buf);
+    r.read_exact(&mut buf); // TOOO, were not checking the result
     return buf[0] as u32 
         | (buf[1] as u32) << 8 
         | (buf[2] as u32) << 16
         | (buf[3] as u32) << 24;
 }
-fn read_fixedu64(r : &mut Read) -> u64 {
+fn read_fixedu64(r : &mut dyn Read) -> u64 {
     return (read_fixedu32(r) as u64)| (read_fixedu32(r) as u64) << 32;
 }
 
@@ -431,7 +431,7 @@ fn double_decoding() {
 // High level readers
 // ------------------------------
 
-fn parse_any_message(r :&mut Read, type_map :&HashMap<u32, SchemaField>) {
+fn parse_any_message(r :&mut dyn Read, type_map :&HashMap<u32, SchemaField>) {
     let mut arrays :HashMap<u32, Vec<String>> = HashMap::new();
 	print!("{{");
 	let mut last_output = false;
@@ -440,7 +440,7 @@ fn parse_any_message(r :&mut Read, type_map :&HashMap<u32, SchemaField>) {
         last_output = true;
     };
     {
-	let mut f = |x, z, c :&mut FnMut()| {
+	let mut f = |x, z, c :&mut dyn FnMut()| {
         out_json(x, z, &mut arrays, c);
     };
 	for wf in raw_parse(r) {
@@ -513,13 +513,13 @@ fn parse_any_message(r :&mut Read, type_map :&HashMap<u32, SchemaField>) {
 	print!("}}");
 }
 
-fn parse_sub_message(r :&mut Read, name :&String, type_map :&HashMap<u32, SchemaField>, last_output: bool) {
+fn parse_sub_message(r :&mut dyn Read, name :&String, type_map :&HashMap<u32, SchemaField>, last_output: bool) {
     if last_output { print!(","); }
     print!("{}:", json_str_token(name));
     parse_any_message(r, type_map);
 }
 
-fn out_json(meta :&SchemaField, json_v :String, m :&mut HashMap<u32, Vec<String>>, c :&mut FnMut()) {
+fn out_json(meta :&SchemaField, json_v :String, m :&mut HashMap<u32, Vec<String>>, c :&mut dyn FnMut()) {
     if meta.repeated {
         if m.contains_key(&meta.field_number) {
             m.get_mut(&meta.field_number).unwrap().push(json_v);
@@ -542,4 +542,4 @@ fn json_bool_token(v :u64) -> String {
         _ => "true".to_string()
     }
 }
-fn json_token(v :&std::fmt::Display) -> String  { return format!("{}", v); }
+fn json_token(v :& dyn std::fmt::Display) -> String  { return format!("{}", v); }

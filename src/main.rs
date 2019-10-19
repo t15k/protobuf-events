@@ -1,287 +1,298 @@
 use std::io::Read;
+use std::fs::File;
+use std::collections::HashMap;
+
+extern crate base64;
+
+// TODO Support packed repeated fields
 
 fn main() {
-	println!("Stream proto");
-	let mut a = MessageHandler{field_handlers: std::collections::HashMap::new()};
-	let  b = [1, 2];
-	a.parse_bytes(&mut &b[..]);
-	println!("I made it");
+    let mut desc_filename = String::from("");
+    let mut it = std::env::args().skip(1);
+    loop {
+        match it.next() {
+            Some(s) => match s.as_ref() {
+                "-d" => match it.next() {
+                    Some(v) => desc_filename = v,
+                    None => {
+                        eprintln!("args for --desc or -d is required!");
+                        std::process::exit(1);
+                    }
+                }
+                _ => {
+                    eprintln!("unknown option {}", s) ;
+                    std::process::exit(1);
+                }
+            },
+            None => ()
+        }
+        break;
+    }
+    let type_map = match File::open(desc_filename) {
+        Ok(mut desc_file) => parse_file_descriptor_proto_set(&mut desc_file),
+        Err(e) => {
+            eprintln!("Could not read descriptor file. Os says {}.", e);
+            std::process::exit(1);
+        }
+    };
+	// TODO something should tell the root message type!
+    parse_any_message(&mut std::io::stdin(), type_map.get("Test").unwrap());
+    //println!("{:?}", &type_map);
+	//println!("I made it");
 }
-#[test]
-fn test_do_like_this() {
-	let mut reg :std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
-	reg.insert(1, 2);
-	let r = [1u8, 2];
-	let mut re = &r[..];
-	let mut count = 0;
-	for res in Iter(&mut re) {
-		match res {
-			Ok((k, v, t)) => {
-				println!("AAAAAA");
-				count += 1;
-				match reg.get(&k) {
-					Some(h) => {println!("HELLO");read_varu64(&mut &r[..]);},//handle(v),
-					None => continue
-				}
-			}
-			Err(_) => ()
-		}
-	}
-	assert_eq!(2, count);
+
+#[derive(Debug, Clone)]
+enum WireType {
+    VarInt(u32),
+    Bit64(u32),
+    LengthDelimited(u32),
+    StartGroup,
+    EndGroup,
+    Bit32(u32),
+    Unknown(u8, u32)
 }
-struct Iter<'a>(&'a mut Read);
-//struct Item(i64, u64, i64);
-impl<'a> Iterator for Iter<'a>{
-	type Item = Result<(i64, u64, i64), ()>;
-	fn next(&mut self) -> Option<Result<(i64, u64, i64), ()>> {
-		let mut re = &mut self.0;
-		match read_varu64(&mut re) {
-			Ok(i) => Some(Ok((1, i, 3))),
-			Err(_) => None
-		}
-	}
+
+#[derive(Debug, Clone)]
+enum WireField {
+    VarInt(u32, u64),
+    Bit64(u32, u64),
+    LengthDelimited(u32, Vec<u8>),
+    Bit32(u32, u32),
+    StartGroup,
+    EndGroup,
+    Unknown(u8, u32)
+}
+
+struct SchemaField {
+    name :String,
+    field_number: u32,
+    repeated :bool,
+    kind :SchemaType2
+}
+
+#[derive(Debug)]
+enum SchemaType2 {
+    Double,
+    Float,
+    Int32,
+    Int64,
+    UInt32,
+    UInt64,
+    SInt32,
+    SInt64,
+    Fixed32,
+    Fixed64,
+    SFixed32,
+    SFixed64,
+    Bool,
+    String,
+    Bytes,
+    Message,
+    Enum,
+    Group,
+    Unknown
+}
+
+fn schema_type2(n :u64) -> SchemaType2 {
+    return match n {
+        1 => SchemaType2::Double,
+        2 => SchemaType2::Float,
+        3 => SchemaType2::Int64,
+        4 => SchemaType2::UInt64,
+        5 => SchemaType2::Int32,
+        6 => SchemaType2::Fixed64,
+        7 => SchemaType2::Fixed32,
+        8 => SchemaType2::Bool,
+        9 => SchemaType2::String,
+        10 => SchemaType2::Group,
+        11 => SchemaType2::Message,
+        12 => SchemaType2::Bytes,
+        13 => SchemaType2::UInt32,
+        14 => SchemaType2::Enum,
+        15 => SchemaType2::SFixed32,
+        16 => SchemaType2::SFixed64,
+        17 => SchemaType2::SInt32,
+        18 => SchemaType2::SInt64,
+        _ => SchemaType2::String
+    }
 }
 
 
-fn next_field(r: &mut Read) -> Result<(u64, u8), ()> {
+#[derive(Debug, Clone)]
+struct Meta {
+    name :String,
+    field_number: u32,
+    repeated :bool
+}
+
+struct ProtoBuffer <'a> {
+    read: &'a mut dyn Read,
+}
+
+impl <'a> Iterator for ProtoBuffer <'a>{
+    type Item = WireField;
+    fn next(&mut self) -> Option<Self::Item> {
+        return match read_key(self.read) {
+            Ok(wt) => match wt {
+                WireType::VarInt(id) => match read_varu64(self.read) {
+                    Ok(v) => Some(WireField::VarInt(id,v)),
+                    Err(e) => panic!(e)
+                },
+                WireType::LengthDelimited(id) => match read_bytes(self.read) {
+                    Ok(v) => Some(WireField::LengthDelimited(id, v)),
+                    Err(e) => panic!(e)
+                },
+                WireType::Bit32(id) => 
+                    Some(WireField::Bit32(id, read_fixedu32(self.read))),
+                WireType::Bit64(id) =>
+                    Some(WireField::Bit64(id, read_fixedu64(self.read))),
+                WireType::StartGroup =>
+                    Some(WireField::StartGroup),
+                WireType::EndGroup =>
+                    Some(WireField::EndGroup),
+                WireType::Unknown(id, v) =>
+                    Some(WireField::Unknown(id, v))
+            },
+            Err(ReadStatus::Empty) => None,
+            Err(e) => {
+                println!("ERROR: {:?}", e);
+                panic!("")}
+        };
+    }
+}
+
+fn raw_parse(r :&mut dyn Read) -> ProtoBuffer {
+    return ProtoBuffer { 
+        read: r 
+    }; 
+}
+
+fn parse_file_descriptor_proto_set(r :&mut dyn Read) -> HashMap<String, HashMap<u32, SchemaField>> {
+    let mut names_to_types = HashMap::new();
+    for e in raw_parse(r) {
+        match e {
+            WireField::LengthDelimited(1, v) => {
+                parse_file_descriptor_proto(&mut &v[..], &mut names_to_types);
+            },
+            _ => ()
+        }
+    }
+    return names_to_types;
+}
+
+fn parse_file_descriptor_proto(r :&mut dyn Read, 
+                               type_names :&mut HashMap<String, HashMap<u32, SchemaField>>) {
+    let mut package_name = String::from(""); // TODO we can be more clever
+    for e in raw_parse(r) {
+        match e {
+            WireField::LengthDelimited(1, v) => {
+                match String::from_utf8(v) {
+                    Ok(_) => (),//println!("OK: {:?}", s),
+                    Err(e)=> eprintln!("ERR: {:?}", e)
+                }
+            },
+            WireField::LengthDelimited(2, v) => {
+                match String::from_utf8(v) {
+                    Ok(s) => package_name = s,
+                    Err(e) => println!("ERR: {:?}", e)
+                }
+            },
+            WireField::LengthDelimited(4, v) => {
+                let (name, map) = parse_descriptor_proto(&mut &v[..]);
+                type_names.insert(name, map);
+                // TODO use return value
+            },
+            _ => ()
+        }
+    }
+}
+
+/// Parse a message descriptor.
+fn parse_descriptor_proto<'a>(r :&mut dyn Read) -> (String, HashMap<u32, SchemaField>) {
+    let mut message_name = String::from(""); 
+    let mut field_map = HashMap::new();
+    for e in raw_parse(r) {
+        match e {
+            WireField::LengthDelimited(1, v) => match String::from_utf8(v) {
+                Ok(s) => message_name = s,
+                Err(e) => println!("{:?}", e) // TODO
+            },
+            WireField::LengthDelimited(2, v) => {
+                let schema_field = parse_field_descriptor_proto(&mut &v[..]);
+                field_map.insert(schema_field.field_number, schema_field);
+            }
+            _ => ()
+        }
+    }
+    return (message_name, field_map);;
+}
+
+fn parse_field_descriptor_proto(r :&mut dyn Read) -> SchemaField {
+    let mut meta = SchemaField{
+        field_number: 0,
+        name: String::from(""),
+        repeated: false,
+        kind: SchemaType2::Unknown
+    };
+    for e in raw_parse(r) {
+        match e {
+            WireField::LengthDelimited(1, v) => match String::from_utf8(v) {
+                Ok(s) => meta.name = s,
+                Err(e) => println!("{:?}", e) // TODO, Error handling.
+            },
+            WireField::VarInt(3, n) => meta.field_number = n as u32,
+            WireField::VarInt(4, n) => meta.repeated = n == 3, // 3 is enum REPATED
+            WireField::VarInt(5, n) => meta.kind = schema_type2(n),
+            _ => ()
+        }
+    }
+    return meta;
+}
+
+/// Read the next field tag (not it's value) from r.
+/// Advances r to the value following the next tag.
+/// Answers a tuple (field_id, field_type)
+fn read_key(r: &mut dyn Read) -> Result<(WireType), ReadStatus> {
 	return match read_varu64(r) {
 		Ok(tag) => {
-			let field_type :u8 = (tag & 0x07) as u8;
-			let field_id = tag >> 3;
-			Ok((field_id, field_type))
+			Ok(wire_type((tag & 0x07) as u8, (tag >> 3) as u32))
 		},
-		Err(_) => Err(()) // FIXME
+		Err(e) => Err(e) // FIXME
 	}
 }
 
-// --------------------------------------
-#[test]
-fn test_or_do_like_this() {
-	let mut reg :std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
-	reg.insert(1, 2);
-	let r = [1u8, 2];
-	let mut count = 0;
-	parse(&mut &r[..], &mut |re| {
-		let mut rr = [0; 1];
-		re.read(&mut rr);
-		count += 1});
-	assert_eq!(1, count);
+fn wire_type(wire_type :u8, id :u32) -> WireType {
+    return match wire_type {
+        0x00 => WireType::VarInt(id),
+        0x01 => WireType::Bit64(id),
+        0x02 => WireType::LengthDelimited(id),
+        0x03 => WireType::StartGroup,
+        0x04 => WireType::EndGroup,
+        0x05 => WireType::Bit32(id),
+        _ => WireType::Unknown(wire_type, id)
+    }
 }
-fn parse<F>(r :&mut Read, f :&mut F) where F :FnMut(&mut Read) {
-	let re = r;
-	match next_field(re) {
-		Ok((_, _)) => f(re),
-		Err(_) => ()
-	}
-}
-
 
 
 // Handler takes a reader and will unmarshal to type
 // handled by the handler, it will consume bytes from the
 // as a side effect of this.
 trait Handle {
-	fn handle(&self, r: &mut std::io::Read);
+	fn handle(&self, r: &mut dyn std::io::Read);
 }
 trait Sink<T> {
 	fn accept(&mut self, v: T);
 }
 
-struct MessageHandler<'a> {
-	//field_handlers: std::collections::HashMap<u64, Box<Handle>>// map[uint64]Handler
-	field_handlers: std::collections::HashMap<u64, &'a Handle>// map[uint64]Handler
-	// u32 -> Handler taking
+#[derive(Debug)]
+enum ReadStatus {
+	Overflow,
+	Empty,
+	IO(std::io::ErrorKind)
 }
-impl<'a> MessageHandler<'a> {
-	fn new() -> Self {
-		MessageHandler{field_handlers: std::collections::HashMap::new()}
-	}
-	// ParseBytes will parse the bytes with the current handlers
-	// registered on this MessageHandler.
-	fn parse_bytes(&mut self, b: &mut&[u8]) {
-	    let v = [1u8, 2, 3];
-		self.handle(b); // return
-		self.handle(&mut &v[..]); // return
-	}
-	fn field(&mut self, fi: u64, h: &'a Handle) {
-		self.field_handlers.insert(fi, h);
-	}
-}
-
-impl<'a> Handle for MessageHandler<'a> {
-	fn handle(&self, r: &mut Read) { //error {
-		match read_varu64(r) { //binary.ReadUvarint(r)// error
-			Ok(field) => {
-				println!("field: {}", field);
-				let field_type = field & 0x07;
-				let field_id = field >> 3;
-				println!("field_type {}", field_id);
-				println!("field_id {}", field_id);
-				match field_type {
-					0x00 => match self.field_handlers.get(&field_id) {
-						Some(h) => h.handle(r),//; err != nil {
-						None => return
-					}
-					0x01 => panic!("fixed64, sfixed64, double not supported"),
-					0x02 => panic!("string, bytes, embedded messages, packed repeated fields not supported"),
-					0x03 => panic!("start groups (deprecated) not supported"),
-					0x04 => panic!("end groups (deprecated) not supported"),
-					0x05 => panic!("fixed32, sfixed32, float not supported"),
-					_ => panic!("not supported")
-				}
-			},
-			Err(_) => return // FIXME
-		}
-	}
-}
-use std::rc::Rc;
-#[test]
-fn test_message_handler_handle() {
-	let sq = [1u64, 2, 3];
-	let mut v = vec![];
-	let mut mh1 = MessageHandler::new();
-	for s in sq.iter() {
-		struct AA (u64);
-		impl Sink<u64> for AA {
-			fn accept(&mut self, i :u64) {
-				self.0 = i;
-			}
-		}
-		let aa: AA = AA(2);
-		//v.push(|y: u64| y + 1);
-		let x1 = std::cell::Cell::new(0);
-		v.push(x1);
-		let u64handler = Uint64Handler{c: Box::new(aa)};
-///		//mh1.field(*s, Box::new(u64handler));
-//		mh1.field(*s, &u64handler);
-		let bytes = [8, 5];
-		mh1.handle(&mut &bytes[..]);
-	//	assert_eq!(5, x1.get())
-	}
-}
-
-
-struct Int32Handler<'a> {
-	callback: &'a Fn(i32)
-}
-
-impl<'a> Handle for Int32Handler<'a> {
-	fn handle(&self, r: &mut Read) {
-		match read_varu64(r) {
-			Ok(v) => {
-				if v <= std::u32::MAX as u64 {
-					(self.callback)(v as i32)
-				} else {
-					println!("errropr")// FIXME ignoring error
-				}
-			},
-			Err(r) => {
-				println!("???????? {}", r);// FIXME
-				return
-			}
-		}
-	}
-}
-#[test]
-fn test_int32_handler_handle() {
-	let t255 = [255, 1];
-	let tm5 = [0b1111_1011, 0xFF, 0xFF, 0xFF, 0b0000_1111];
-	//let tm5 = [0x80, 0x80, 0x80, 0x80, 0b001_000];
-	let tcs = [(255i32, &t255[..]), (-5, &tm5[..])];
-	for tc in tcs.iter() {
-		let x1 = std::cell::Cell::new(0i32);
-		let h = Int32Handler{callback: &|y: i32| x1.set(y)};
-		//let bytes = [255, 1];//, 255, 255, 255, 255, 255, 255];
-		let mut bytes = tc.1;
-		h.handle(&mut bytes);
-		assert_eq!(tc.0, x1.get())
-	}
-}
-
-struct StringHandler {}
-
-struct Uint64Handler{c: Box<Sink<u64>>}
-
-
-type MyNum = i64;
-trait Inc {
-	fn inc(&self) -> MyNum;
-}
-impl Inc for MyNum {
-	fn inc(&self) -> MyNum {
-		return self + 1;
-	}
-}
-
-impl Handle for Uint64Handler {
-	fn handle(&self, r: &mut Read) {// (err error) {
-		match read_varu64(r) {
-			Ok(v) => return,//self.c.accept(v),
-			Err(_) => return // FIXME
-		};
-	}
-}
-#[test]
-fn test_some() {
-	let v1 = vec![1, 3];
-	let v2 = vec![1, 3];
-
-	assert_eq!(v1, v2);
-	let mut v3 = vec![1];
-	v3.push(3);
-	assert_eq!(v1, v3);
-	let mn: MyNum = 5;
-	assert_eq!(7, mn.inc().inc());
-
-
-}
-//struct Int64Handler {
-//	callback: Fn(i64)
-//}
-
-struct Uint32Handler<'a> {
-	callback: &'a Fn(u32)
-}
-impl<'a> Handle for Uint32Handler<'a> {
-	fn handle(&self, r: &mut Read) {
-		match read_varu64(r) {
-			Ok(v) => {
-				if v <= std::u32::MAX as u64 {
-					(self.callback)(v as u32)
-				} // FIXME ignoring error
-			},
-			Err(_) => return // FIXME
-		}
-	}
-}
-#[test]
-fn test_uint32_handler_handle() {
-	let x1 = std::cell::Cell::new(0u32);
-	let mut h = Uint32Handler{callback: &|y: u32| x1.set(y)};
-	let bytes = [255, 1];//, 255, 255, 255, 255, 255, 255];
-	h.handle(&mut &bytes[..]);
-	assert_eq!(255, x1.get())
-	//assert_eq!(std::u32::MAX, x1.get())
-}
-//struct BoolHandler {
-//	callback: Fn(bool)
-//}
-//struct FloatHandler {
-//	callback: Fn(f32)
-//}
-//struct DoubleHandler {
-//	callback: Fn(f64)
-//}
-//struct BinaryHandler {
-//	callback: Fn(&[i8])
-//}
-//struct VariError<T, E> {
-//	value: T,
-//	reason: E
-//}
 
 // read_varu64 reads an unsigned varint from the reader r.
-fn read_varu64(r: &mut Read) -> Result<u64, u64> {// (uint64, error) {
+fn read_varu64(r: &mut dyn Read) -> Result<u64, ReadStatus> {// (uint64, error) {
 	let mut x: u64 = 0;
 	let mut s: u32 = 0;
 	let i: u32 = 0;
@@ -289,24 +300,24 @@ fn read_varu64(r: &mut Read) -> Result<u64, u64> {// (uint64, error) {
 	loop {
 		let size = match r.read(&mut buf) {
 			Ok(s) => s,
-			Err(_) => return Err(x)
+			Err(r) => return Err(ReadStatus::IO(r.kind()))
 		};
-		//println!("r-{}", buf[0]);
 		if size > 0 {
 			let v = buf[0];
 			if v < 0x80 {
 				if i > 9 || i == 9 && v > 1 {
-					return Err(x)
+					return Err(ReadStatus::Overflow)
 				}
 				return Ok(x | u64::from(buf[0])<<s)
 			}
 			x |= u64::from(v & 0x7f) << s;
 			s += 7;
 		} else {
-			return Err(x)
+			return Err(ReadStatus::Empty)
 		}
 	}
 }
+
 #[test]
 fn test_read_varu64(){
 	let simple = [0x01];
@@ -314,7 +325,7 @@ fn test_read_varu64(){
 	let boundary_one = [0x80, 0x01];
 	let max = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01];
 	// More tests
-	// 1) for errorr where we run out of byte, but 8th bit was set.
+	// 1) for error where we run out of byte, but 8th bit was set.
 	// 2) Overflow, in 11th byte
 	// 3) Overflow, 12 or more bytes.
 	let tcs = [(1, &simple[..]), (129, &boundary[..]), (128, &boundary_one[..]),
@@ -333,22 +344,202 @@ fn test_read_varu64(){
 fn test_read_varu64_to_few_byte(){
 	let mut one_short = &[0x81, 0x81][..];
 	match read_varu64(&mut one_short) {
-		Ok(_) => assert_eq!(1, 2), // we shouldn't end up here
-		Err(v) => assert_eq!(v, 129)
+		Ok(_) => assert_eq!(1, 2),
+		Err(v) => match v { // we shouldn't end up here
+			ReadStatus::Empty => (),
+			_ => assert!(false)
+		}
 	}
 }
+fn read_bytes<'a>(r :&'a mut dyn Read) -> Result<Vec<u8>, std::io::Error> {
+	match read_varu64(r) {
+		Ok(l) => {
+            let mut t = r.take(l);
+            let mut v = Vec::with_capacity(l as usize);
+            match t.read_to_end(&mut v) {
+                Ok(_) => Ok(v),
+                Err(e) => Err(e)
+            }
+        },
+		Err(_) => Err(std::io::Error::new(std::io::ErrorKind::Other, "oh no"))
+	}
+}
+fn read_fixedu32(r : &mut dyn Read) -> u32 {
+    let mut buf = [0; 4];
+    r.read_exact(&mut buf); // TOOO, were not checking the result
+    return buf[0] as u32 
+        | (buf[1] as u32) << 8 
+        | (buf[2] as u32) << 16
+        | (buf[3] as u32) << 24;
+}
+fn read_fixedu64(r : &mut dyn Read) -> u64 {
+    return (read_fixedu32(r) as u64)| (read_fixedu32(r) as u64) << 32;
+}
 
-//fn read_vari64(r: &mut Read) -> Result<i64, i64> {
-//	let ux = match read_varu64(r) {
-//		Ok(v) => v,
-//		Err(e) => e
-//	};
-//	let x = ux as i64;// i64::from(ux >> 1);
-	// if ux & 1 != 0 {
-	//	x = ^x;
-	//}
-//	return Ok(x)
-//}
-/*
-	typ := b[0] & 0x07
-*/
+fn decode_zigzag32(n :u64) -> i32 {
+    return ((n >> 1) ^ (-((n & 1) as i64)) as u64) as i32
+}
+#[test]
+fn zigzag32_decoding() {
+    assert_eq!(-1, decode_zigzag32(1));
+    assert_eq!(1, decode_zigzag32(2));
+    assert_eq!(-2, decode_zigzag32(3));
+    assert_eq!(2147483647, decode_zigzag32(4294967294));
+    assert_eq!(-2147483648, decode_zigzag32(4294967295));
+}
+
+fn decode_zigzag64(n :u64) -> i64{
+    return ((n >> 1) ^ (-((n & 1) as i64)) as u64) as i64
+}
+#[test]
+fn zigzag64_decoding() {
+    assert_eq!(-1, decode_zigzag64(1));
+    assert_eq!(1, decode_zigzag64(2));
+    assert_eq!(-2, decode_zigzag64(3));
+    assert_eq!(2147483648, decode_zigzag64(4294967296));
+    assert_eq!(-2147483649, decode_zigzag64(4294967297));
+}
+fn decode_sfixed32(n :u32) -> i32 { return n as i32;}
+
+fn decode_fixed32(n :u32) -> u32 { return n;}
+
+fn decode_float(n :u32) -> f32 { return f32::from_bits(n); }
+#[test]
+fn float_decoding() {
+    let a = [205, 204, 204, 63];
+    let n = read_fixedu32(&mut &a[..]);
+    let f = decode_float(n);
+    assert_eq!(1.6, f);
+}
+
+fn decode_sfixed64(n :u64) -> i64 { return n as i64; }
+
+fn decode_fixed64(n :u64) -> u64 { return n as u64; }
+
+fn decode_double(n :u64) -> f64 { return f64::from_bits(n); }
+#[test]
+fn double_decoding() {
+    let a = [51, 51, 51, 51, 51, 51, 3, 64];
+    let n = read_fixedu64(&mut &a[..]);
+    let f = decode_double(n);
+    assert_eq!(2.4, f);
+
+
+}
+
+// ------------------------------
+// High level readers
+// ------------------------------
+
+fn parse_any_message(r :&mut dyn Read, type_map :&HashMap<u32, SchemaField>) {
+    let mut arrays :HashMap<u32, Vec<String>> = HashMap::new();
+	print!("{{");
+	let mut last_output = false;
+    let mut c = || {
+        if last_output {print!(",")}
+        last_output = true;
+    };
+    {
+	let mut f = |x, z, c :&mut dyn FnMut()| {
+        out_json(x, z, &mut arrays, c);
+    };
+	for wf in raw_parse(r) {
+		match wf {
+			WireField::VarInt(fid, v) =>  match type_map.get(&fid) {
+                Some(map_type_v) => match map_type_v.kind {
+                    SchemaType2::Int32 =>  f(map_type_v, json_token(&(v as i32)), &mut c),
+                    SchemaType2::Int64 => f(map_type_v, json_token(&v), &mut c),
+                    SchemaType2::UInt32 => f(map_type_v, json_token(&(v as u32)), &mut c),
+                    SchemaType2::UInt64 => f(map_type_v, json_token(&(v as u64)), &mut c),
+                    SchemaType2::SInt32 => f(map_type_v, json_token(&decode_zigzag32(v)), &mut c),
+                    SchemaType2::SInt64 => f(map_type_v, json_token(&decode_zigzag64(v)), &mut c),
+                    SchemaType2::Bool => f(map_type_v, json_bool_token(v), &mut c),
+                    SchemaType2::Enum => (),
+                    _ => () // Unknown combi, ignore
+                },
+                None => () //ignore
+			},
+			WireField::Bit64(fid, v) => match type_map.get(&fid) {
+                Some(schema_field) => match schema_field.kind {
+                SchemaType2::SFixed64 => f(schema_field, json_token(&decode_sfixed64(v)), &mut c),
+                SchemaType2::Fixed64 => f(schema_field, json_token(&decode_fixed64(v)), &mut c),
+                SchemaType2::Double => f(schema_field, json_token(&decode_double(v)), &mut c),
+                    _ => () // ignore
+                },
+                None => () // ignore
+			},
+			WireField::LengthDelimited(fid, v) => match type_map.get(&fid) {
+                Some(schema_field) => match schema_field.kind {
+                    SchemaType2::String => match String::from_utf8(v) {
+				    	Ok(s) => f(schema_field, json_str_token(&s), &mut c),
+					    Err(_) => () // ignore corrupt string
+				    },
+				    SchemaType2::Bytes =>
+                        f(schema_field, json_str_token(&base64::encode(&v)), &mut c),
+				    SchemaType2::Message => {
+                        c();
+                        parse_sub_message(&mut &v[..], &schema_field.name, type_map, false);
+                    },
+				    _ => () // Unknown combi, ignore
+                },
+			    None => () // unknown field, ignore
+			},
+			WireField::Bit32(fid, v) => match type_map.get(&fid) {
+                Some(schema_field) => match schema_field.kind {
+                    SchemaType2::SFixed32 => f(schema_field, json_token(&decode_sfixed32(v)), &mut c),
+                    SchemaType2::Fixed32 => f(schema_field, json_token(&decode_fixed32(v)), &mut c),
+                    SchemaType2::Float => f(schema_field, json_token(&decode_float(v)), &mut c),
+                    _ => ()
+                },
+                None => () // ignore
+			},
+			WireField::StartGroup => (), // ignore
+			WireField::EndGroup => (), // ignore
+			WireField::Unknown(_, _) => ()//ignore
+		}
+	}
+    }
+    for (k, array_v) in arrays.iter() {
+        let mut acomma = false;
+        c();
+        print!("\"{}\":[", &type_map.get(&k).unwrap().name);
+        for a in array_v {
+            if acomma { print!(","); }
+            acomma = true;
+            print!("{}", a);
+        }
+        print!("]");
+    }
+	print!("}}");
+}
+
+fn parse_sub_message(r :&mut dyn Read, name :&String, type_map :&HashMap<u32, SchemaField>, last_output: bool) {
+    if last_output { print!(","); }
+    print!("{}:", json_str_token(name));
+    parse_any_message(r, type_map);
+}
+
+fn out_json(meta :&SchemaField, json_v :String, m :&mut HashMap<u32, Vec<String>>, c :&mut dyn FnMut()) {
+    if meta.repeated {
+        if m.contains_key(&meta.field_number) {
+            m.get_mut(&meta.field_number).unwrap().push(json_v);
+        } else {
+            m.insert(meta.field_number, vec!(json_v));
+        }
+    } else {
+        c();
+        print!("\"{}\": {}", &meta.name, &json_v);
+    }
+}
+
+
+fn json_str_token(v :&String) -> String {
+    return format!("\"{}\"", v);
+}
+fn json_bool_token(v :u64) -> String {
+    return match v {
+        0 => "false".to_string(),
+        _ => "true".to_string()
+    }
+}
+fn json_token(v :& dyn std::fmt::Display) -> String  { return format!("{}", v); }

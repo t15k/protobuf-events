@@ -1,0 +1,22 @@
+Stream proto
+VarInt(1, 1)
+VarInt(2, 2)
+VarInt(3, 6)
+VarInt(4, 8)
+LengthDelimited(5, [115, 116, 114, 45, 118, 97, 108, 117, 101])
+Bit32(6, 1)
+Bit32(16671945, 1)
+Bit64(7, 2)
+StartGroup
+StartGroup
+StartGroup
+StartGroup
+StartGroup
+StartGroup
+StartGroup
+VarInt(8, 66)
+LengthDelimited(0, [14, 82, 4, 115, 116, 114, 49, 82])
+EndGroup
+StartGroup
+EndGroup
+LengthDelimited(14, [])

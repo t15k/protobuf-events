@@ -3,11 +3,15 @@ use std::fs::File;
 use std::collections::HashMap;
 
 extern crate base64;
-
+mod query_parser;
 // TODO Support packed repeated fields
 
 fn main() {
+
+    query_parser::Tokenizer::new(".hello.name");
+
     let mut desc_filename = String::from("");
+    let mut expression: Option<String> = None;
     let mut it = std::env::args().skip(1);
     loop {
         match it.next() {
@@ -18,16 +22,23 @@ fn main() {
                         eprintln!("args for --desc or -d is required!");
                         std::process::exit(1);
                     }
-                }
+                },
+                "-e" => match it.next() {
+                    None => {
+                        eprintln!("expression must follow -e");
+                        std::process::exit(2);
+                    },
+                    v => expression = v
+                },
                 _ => {
                     eprintln!("unknown option {}", s) ;
-                    std::process::exit(1);
+                    std::process::exit(3);
                 }
             },
-            None => ()
+            None => break
         }
-        break;
     }
+    
     let type_map = match File::open(desc_filename) {
         Ok(mut desc_file) => parse_file_descriptor_proto_set(&mut desc_file),
         Err(e) => {
@@ -40,6 +51,42 @@ fn main() {
     //println!("{:?}", &type_map);
 	//println!("I made it");
 }
+#[test]
+fn test_do_like_this() {
+	let mut reg :std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+	reg.insert(1, 2);
+	let r = [1u8, 2];
+	let mut re = &r[..];
+	let mut count = 0;
+	for res in Iter(&mut re) {
+		match res {
+			Ok((k, v, t)) => {
+				println!("AAAAAA");
+				count += 1;
+				match reg.get(&k) {
+					Some(h) => {println!("HELLO");read_varu64(&mut &r[..]);},//handle(v),
+					None => continue
+				}
+			}
+			Err(_) => ()
+		}
+	}
+	assert_eq!(2, count);
+}
+struct Iter<'a>(&'a mut Read);
+//struct Item(i64, u64, i64);
+impl<'a> Iterator for Iter<'a>{
+	type Item = Result<(i64, u64, i64), ()>;
+	fn next(&mut self) -> Option<Result<(i64, u64, i64), ()>> {
+		let mut re = &mut self.0;
+		match read_varu64(&mut re) {
+			Ok(i) => Some(Ok((1, i, 3))),
+			Err(_) => None
+		}
+	}
+}
+
+// TODO Support packed repeated fields
 
 #[derive(Debug, Clone)]
 enum WireType {

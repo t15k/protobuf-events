@@ -1,6 +1,7 @@
 use std::io::Read;
 use std::collections::HashMap;
 
+// pub type FieldNumber = u32;, re-instate
 pub struct Tokenizer {
 
 }
@@ -25,7 +26,7 @@ impl Iterator for Tokenizer {
 
 // TODO Support packed repeated fields
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 enum WireType {
     VarInt(u32),
     Bit64(u32),
@@ -48,10 +49,10 @@ pub enum WireField {
 }
 
 pub struct SchemaField {
-    name :String,
-    field_number: u32,
-    repeated :bool,
-    kind :SchemaType2
+    pub name :String,
+    pub field_number: u32,
+    pub repeated :bool,
+    pub kind :SchemaType2
 }
 
 #[derive(Debug)]
@@ -109,8 +110,14 @@ struct Meta {
     repeated :bool
 }
 
-struct ProtoBuffer <'a> {
+pub struct ProtoBuffer <'a> {
     read: &'a mut dyn Read,
+}
+
+impl ProtoBuffer<'_> {
+    fn from_read(read: &mut dyn Read) -> ProtoBuffer{
+        ProtoBuffer{read: read}
+    }
 }
 
 impl <'a> Iterator for ProtoBuffer <'a>{
@@ -145,7 +152,7 @@ impl <'a> Iterator for ProtoBuffer <'a>{
     }
 }
 
-fn raw_parse(r :&mut dyn Read) -> ProtoBuffer {
+pub fn raw_parse(r :&mut dyn Read) -> ProtoBuffer {
     return ProtoBuffer { 
         read: r 
     }; 

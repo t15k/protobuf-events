@@ -71,6 +71,7 @@ pub fn parse(txt: &String) -> Tokenizer {
 // -----------------------
 pub enum Token {
     Accessor,
+    MapAccessor,
     Name(String)
 }
 
